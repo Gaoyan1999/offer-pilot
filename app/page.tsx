@@ -61,6 +61,15 @@ type TailoredResume = {
   gaps: string[];
 };
 
+type AgentApiResponse = {
+  reply?: string;
+  profilePatch?: Partial<CandidateProfile>;
+  usedOpenAI?: boolean;
+  model?: string;
+  error?: string;
+  detail?: string;
+};
+
 const knownSkills = [
   "React",
   "Next.js",
@@ -503,6 +512,42 @@ function formatProfileSummary(profile: CandidateProfile) {
   ];
 }
 
+function mergeProfilePatch(base: CandidateProfile, patch?: Partial<CandidateProfile>): CandidateProfile {
+  if (!patch) return base;
+
+  const next = { ...base };
+  const stringKeys: Array<keyof Pick<
+    CandidateProfile,
+    "name" | "email" | "phone" | "targetRole" | "targetLocation" | "yearsExperience" | "authorization"
+  >> = ["name", "email", "phone", "targetRole", "targetLocation", "yearsExperience", "authorization"];
+  const arrayKeys: Array<keyof Pick<CandidateProfile, "skills" | "experienceFacts" | "projectFacts" | "educationFacts">> = [
+    "skills",
+    "experienceFacts",
+    "projectFacts",
+    "educationFacts",
+  ];
+
+  stringKeys.forEach((key) => {
+    const value = patch[key];
+    if (typeof value === "string" && value.trim()) {
+      next[key] = value.trim();
+    }
+  });
+
+  if (patch.workMode === "remote" || patch.workMode === "hybrid" || patch.workMode === "onsite") {
+    next.workMode = patch.workMode;
+  }
+
+  arrayKeys.forEach((key) => {
+    const value = patch[key];
+    if (Array.isArray(value) && value.length > 0) {
+      next[key] = unique([...next[key], ...value.map((item) => item.trim()).filter(Boolean)]);
+    }
+  });
+
+  return next;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("cv");
   const [chatInput, setChatInput] = useState("");
@@ -512,6 +557,7 @@ export default function Home() {
   const [resume, setResume] = useState<TailoredResume | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
   const [searchStatus, setSearchStatus] = useState("Waiting for instructions");
+  const [isThinking, setIsThinking] = useState(false);
 
   const missingInfo = useMemo(() => getMissingInfo(profile), [profile]);
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
@@ -532,17 +578,19 @@ export default function Home() {
     setProfile((current) => ({ ...current, ...next }));
   }
 
-  function completeSearch(nextProfile: CandidateProfile) {
+  function completeSearch(nextProfile: CandidateProfile, options?: { suppressMessage?: boolean }) {
     const ranked = rankJobs(nextProfile);
     setJobs(ranked);
     setSelectedJobId(ranked[0]?.id ?? "");
     setResume(null);
     setActiveTab("jobs");
     setSearchStatus(`Ranked ${ranked.length} jobs with fallback dataset`);
-    addMessage("agent", `I found and ranked ${ranked.length} roles. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+    if (!options?.suppressMessage) {
+      addMessage("agent", `I found and ranked ${ranked.length} roles. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+    }
   }
 
-  function evaluateProfileForSearch(nextProfile: CandidateProfile) {
+  function evaluateProfileForSearch(nextProfile: CandidateProfile, options?: { suppressMessage?: boolean }) {
     const missing = getMissingInfo(nextProfile);
     setProfile(nextProfile);
     setResume(null);
@@ -551,11 +599,13 @@ export default function Home() {
       setJobs([]);
       setSelectedJobId("");
       setSearchStatus(`Needs ${missing.length} missing details`);
-      addMessage("agent", `I need ${missing.join(", ")} before I can search and rank jobs.`, "missing-info");
+      if (!options?.suppressMessage) {
+        addMessage("agent", `I need ${missing.join(", ")} before I can search and rank jobs.`, "missing-info");
+      }
       return;
     }
 
-    completeSearch(nextProfile);
+    completeSearch(nextProfile, options);
   }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -601,15 +651,57 @@ export default function Home() {
     addMessage("agent", "I loaded the resume text and updated your profile facts.", "status");
   }
 
-  function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const prompt = chatInput.trim();
     if (!prompt) return;
 
     setChatInput("");
     addMessage("user", prompt);
-    const nextProfile = parseProfile(prompt, profile);
-    evaluateProfileForSearch(nextProfile);
+    setSearchStatus("Thinking with GPT");
+    setIsThinking(true);
+
+    const locallyParsedProfile = parseProfile(prompt, profile);
+
+    try {
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: prompt,
+          profile: locallyParsedProfile,
+          missingInfo: getMissingInfo(locallyParsedProfile),
+        }),
+      });
+      const data = (await response.json()) as AgentApiResponse;
+
+      if (!response.ok || data.error) {
+        throw new Error(data.detail || data.error || "GPT request failed.");
+      }
+
+      const nextProfile = mergeProfilePatch(locallyParsedProfile, data.profilePatch);
+      const missing = getMissingInfo(nextProfile);
+      const reply =
+        data.reply ||
+        (data.usedOpenAI ? "I updated the profile with GPT and will continue the workflow." : "I used the local parser and will continue the workflow.");
+
+      addMessage("agent", reply, missing.length > 0 ? "missing-info" : "status");
+      evaluateProfileForSearch(nextProfile, { suppressMessage: true });
+    } catch (error) {
+      const nextProfile = locallyParsedProfile;
+      addMessage(
+        "agent",
+        error instanceof Error
+          ? `GPT is unavailable right now, so I used the local parser instead. ${error.message}`
+          : "GPT is unavailable right now, so I used the local parser instead.",
+        "status",
+      );
+      evaluateProfileForSearch(nextProfile);
+    } finally {
+      setIsThinking(false);
+    }
   }
 
   function handleMissingInfoSubmit(event: FormEvent<HTMLFormElement>) {
@@ -810,6 +902,17 @@ export default function Home() {
               </button>
             </form>
           ) : null}
+
+          {isThinking ? (
+            <article className="message agent loading-message" aria-label="OfferPilot is thinking">
+              <span>AI</span>
+              <div className="typing-indicator" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </div>
+            </article>
+          ) : null}
         </div>
 
         <form className="composer" onSubmit={handleChatSubmit}>
@@ -818,9 +921,10 @@ export default function Home() {
             onChange={(event) => setChatInput(event.target.value)}
             placeholder="Example: I want software jobs in Sydney"
             aria-label="Chat with OfferPilot"
+            disabled={isThinking}
           />
           <button className="primary-action" type="submit">
-            Send
+            {isThinking ? "Thinking" : "Send"}
           </button>
         </form>
       </section>
