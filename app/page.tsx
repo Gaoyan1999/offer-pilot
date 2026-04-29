@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ChangeEvent, useMemo, useState } from "react";
 
 type WorkMode = "remote" | "hybrid" | "onsite" | "";
@@ -598,211 +599,261 @@ export default function Home() {
   }
 
   return (
-    <main className="page">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">OfferPilot MVP</p>
-          <h1>Job discovery and tailored resume generator</h1>
+    <main className="page-shell">
+      <nav className="top-nav" aria-label="Primary navigation">
+        <Link className="wordmark" href="/">
+          OfferPilot
+        </Link>
+        <div className="nav-links">
+          <Link href="/jobs">Jobs</Link>
+          <Link href="/resume">Resume</Link>
+          <Link href="/profile">Profile</Link>
         </div>
-        <button type="button" onClick={handleStartAgent}>
+        <button className="nav-action" type="button" onClick={handleStartAgent}>
           Start Agent
         </button>
-      </header>
+      </nav>
 
-      <section className="layout">
-        <aside className="leftPane">
-          <section className="panel">
-            <div className="sectionHeader">
-              <h2>Free input / resume</h2>
-              <span>{profile.skills.length} skills found</span>
-            </div>
+      <section className="hero-section">
+        <div className="section-label">
+          <span />
+          <p>OfferPilot MVP</p>
+          <span />
+        </div>
+        <h1>Job discovery and tailored resume generator.</h1>
+        <p className="hero-copy">
+          Upload a resume or describe your background, answer missing profile details, rank matching roles, and generate
+          a fact-based tailored resume for the selected job.
+        </p>
+        <div className="hero-actions">
+          <button className="button button-primary" type="button" onClick={handleStartAgent}>
+            Parse Profile
+          </button>
+          <button className="button button-secondary" type="button" onClick={handleSearchWithProfile}>
+            Search Jobs
+          </button>
+        </div>
+      </section>
 
-            <label htmlFor="resumeUpload">Upload resume</label>
-            <input id="resumeUpload" type="file" accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf" onChange={handleFileChange} />
-            {profile.uploadNote ? <p className="hint">{profile.uploadNote}</p> : null}
+      <section className="workspace-grid">
+        <article className="input-panel">
+          <p className="small-caps">Free Input</p>
+          <h2>Tell OfferPilot what kind of work should find you.</h2>
 
-            <label htmlFor="freeText">Background and target</label>
+          <label htmlFor="resumeUpload">Upload resume</label>
+          <input id="resumeUpload" type="file" accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf" onChange={handleFileChange} />
+          {profile.uploadNote ? <p>{profile.uploadNote}</p> : null}
+
+          <label htmlFor="freeText">Background and target</label>
+          <div className="paper-field">
             <textarea id="freeText" value={freeText} onChange={(event) => setFreeText(event.target.value)} rows={10} />
+          </div>
 
-            <button type="button" onClick={handleStartAgent}>
-              Parse profile
-            </button>
-          </section>
+          <div className="upload-strip">
+            <span>PDF Resume</span>
+            <span>Markdown</span>
+            <span>Plain Text</span>
+          </div>
+        </article>
 
-          <section className="panel">
-            <div className="sectionHeader">
-              <h2>Follow-up questions</h2>
-              <span>{missingInfo.length === 0 ? "Complete" : `${missingInfo.length} missing`}</span>
-            </div>
-
-            {missingInfo.length > 0 ? (
-              <ul className="questionList">
-                {missingInfo.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="hint">Enough information is available to search and rank jobs.</p>
-            )}
-
-            <div className="fieldGrid">
-              <label>
-                Target role
-                <input value={profile.targetRole} onChange={(event) => updateProfile({ targetRole: event.target.value })} placeholder="AI Product Engineer" />
-              </label>
-              <label>
-                Target location
-                <input value={profile.targetLocation} onChange={(event) => updateProfile({ targetLocation: event.target.value })} placeholder="Sydney / Remote" />
-              </label>
-              <label>
-                Work mode
-                <select value={profile.workMode} onChange={(event) => updateProfile({ workMode: event.target.value as WorkMode })}>
-                  <option value="">Select</option>
-                  <option value="remote">Remote</option>
-                  <option value="hybrid">Hybrid</option>
-                  <option value="onsite">Onsite</option>
-                </select>
-              </label>
-              <label>
-                Years
-                <input value={profile.yearsExperience} onChange={(event) => updateProfile({ yearsExperience: event.target.value })} placeholder="4" />
-              </label>
-              <label className="wideField">
-                Work authorization
-                <input
-                  value={profile.authorization}
-                  onChange={(event) => updateProfile({ authorization: event.target.value })}
-                  placeholder="Citizen, PR, visa holder, sponsorship required"
-                />
-              </label>
-            </div>
-
-            <button type="button" onClick={handleSearchWithProfile}>
-              Search jobs
-            </button>
-          </section>
-
-          <section className="panel">
-            <h2>Agent trace</h2>
-            <ol className="traceList">
-              {trace.map((item, index) => (
-                <li key={`${item}-${index}`}>{item}</li>
-              ))}
-            </ol>
-          </section>
-        </aside>
-
-        <section className="rightPane">
-          <section className="panel">
-            <div className="sectionHeader">
-              <h2>Job matches</h2>
-              <span>{jobs.length > 0 ? "Sorted by match score" : "Waiting"}</span>
-            </div>
-
-            {jobs.length === 0 ? (
-              <p className="emptyState">Parse a profile with enough target information to see ranked job matches.</p>
-            ) : (
-              <div className="jobList">
-                {jobs.map((job) => (
-                  <button
-                    type="button"
-                    className={`jobCard ${selectedJob?.id === job.id ? "selected" : ""}`}
-                    key={job.id}
-                    onClick={() => handleSelectJob(job.id)}
-                  >
-                    <span className="score">{job.matchScore}</span>
-                    <span>
-                      <strong>{job.title}</strong>
-                      <small>
-                        {job.company} · {job.location} · {job.source}
-                      </small>
-                    </span>
-                    <span className="jobReason">{job.matchRationale[0]}</span>
-                  </button>
-                ))}
+        <aside className="question-panel">
+          <p className="small-caps">Follow-Up</p>
+          <h3>{missingInfo.length === 0 ? "Profile is ready for search." : "Missing details before search."}</h3>
+          <div className="question-list">
+            {(missingInfo.length > 0 ? missingInfo : ["Enough information is available to search and rank jobs."]).map((item) => (
+              <div className="question-row" key={item}>
+                <span />
+                <p>{item}</p>
               </div>
-            )}
-          </section>
+            ))}
+          </div>
+        </aside>
+      </section>
 
-          {selectedJob ? (
-            <section className="detailGrid">
-              <article className="panel">
-                <div className="sectionHeader">
-                  <h2>Selected job</h2>
-                  <span>{selectedJob.matchScore}/100</span>
-                </div>
-                <h3>{selectedJob.title}</h3>
-                <p className="muted">
+      <section className="profile-layout">
+        <article className="profile-card accent-top">
+          <p className="small-caps">Profile Controls</p>
+          <h2>Complete the search profile.</h2>
+          <div className="question-grid">
+            <label>
+              Target role
+              <input value={profile.targetRole} onChange={(event) => updateProfile({ targetRole: event.target.value })} placeholder="AI Product Engineer" />
+            </label>
+            <label>
+              Target location
+              <input value={profile.targetLocation} onChange={(event) => updateProfile({ targetLocation: event.target.value })} placeholder="Sydney / Remote" />
+            </label>
+            <label>
+              Work mode
+              <select value={profile.workMode} onChange={(event) => updateProfile({ workMode: event.target.value as WorkMode })}>
+                <option value="">Select</option>
+                <option value="remote">Remote</option>
+                <option value="hybrid">Hybrid</option>
+                <option value="onsite">Onsite</option>
+              </select>
+            </label>
+            <label>
+              Years
+              <input value={profile.yearsExperience} onChange={(event) => updateProfile({ yearsExperience: event.target.value })} placeholder="4" />
+            </label>
+            <label>
+              Work authorization
+              <input
+                value={profile.authorization}
+                onChange={(event) => updateProfile({ authorization: event.target.value })}
+                placeholder="Citizen, PR, visa holder, sponsorship required"
+              />
+            </label>
+          </div>
+          <div className="hero-actions">
+            <button className="button button-primary" type="button" onClick={handleSearchWithProfile}>
+              Search Jobs
+            </button>
+          </div>
+        </article>
+
+        <article className="profile-card">
+          <p className="small-caps">Agent Trace</p>
+          <h2>Latest execution steps.</h2>
+          <div className="document-list">
+            {trace.map((item, index) => (
+              <div key={`${item}-${index}`}>
+                <span />
+                <p>{item}</p>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="section-block">
+        <div className="section-label">
+          <span />
+          <p>Job Matches</p>
+          <span />
+        </div>
+
+        {jobs.length === 0 ? (
+          <article className="detail-card">
+            <p className="small-caps">Waiting</p>
+            <h2>No ranked jobs yet.</h2>
+            <p>Parse a profile with enough target information to see ranked job matches.</p>
+          </article>
+        ) : (
+          <div className="jobs-layout">
+            <div className="job-table" aria-label="Ranked job matches">
+              <div className="table-head">
+                <span>Role</span>
+                <span>Location</span>
+                <span>Score</span>
+                <span>Gap</span>
+              </div>
+              {jobs.map((job) => (
+                <button className="job-row" type="button" key={job.id} onClick={() => handleSelectJob(job.id)}>
+                  <div>
+                    <h2>{job.title}</h2>
+                    <p>
+                      {job.company} · {job.source}
+                    </p>
+                  </div>
+                  <p>{job.location}</p>
+                  <strong>{job.matchScore}</strong>
+                  <p>{job.gaps[0]}</p>
+                </button>
+              ))}
+            </div>
+
+            {selectedJob ? (
+              <aside className="detail-card">
+                <p className="small-caps">Selected Role</p>
+                <h2>{selectedJob.title}</h2>
+                <p>
                   {selectedJob.company} · {selectedJob.location} · {selectedJob.workMode}
                 </p>
                 <p>{selectedJob.description}</p>
-                <a href={selectedJob.url} target="_blank" rel="noreferrer">
+                <Link href={selectedJob.url} target="_blank" rel="noreferrer">
                   Open job URL
-                </a>
-
-                <h4>Match reasoning</h4>
-                <ul>
-                  {selectedJob.matchRationale.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-
-                <h4>Gaps and risks</h4>
-                <ul>
-                  {[...selectedJob.gaps, ...selectedJob.risks].map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </article>
-
-              <article className="panel resumePanel">
-                <div className="sectionHeader">
-                  <h2>Tailored resume</h2>
-                  <span>Fixed template</span>
+                </Link>
+                <div className="detail-metrics">
+                  <div>
+                    <span>{selectedJob.matchScore}</span>
+                    <small>Match</small>
+                  </div>
+                  <div>
+                    <span>{selectedJob.matchRationale.length}</span>
+                    <small>Reasons</small>
+                  </div>
                 </div>
-                <button type="button" onClick={handleGenerateResume}>
-                  Generate tailored resume
-                </button>
+                <div className="rule-list">
+                  {[...selectedJob.matchRationale, ...selectedJob.gaps, ...selectedJob.risks].map((item) => (
+                    <p key={item}>{item}</p>
+                  ))}
+                </div>
+              </aside>
+            ) : null}
+          </div>
+        )}
+      </section>
 
-                {resume ? (
-                  <>
-                    <div className="resumePreview">
-                      <h3>{profile.name || "Candidate"}</h3>
-                      <p className="muted">{[profile.email, profile.phone, profile.targetLocation].filter(Boolean).join(" · ")}</p>
-                      <h4>Professional summary</h4>
-                      <p>{resume.summary}</p>
-                      <h4>Skills</h4>
-                      <p>{resume.skills.join(", ") || "No skills provided."}</p>
-                      <h4>Experience</h4>
-                      <ul>
-                        {resume.experience.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                      <h4>Projects</h4>
-                      <ul>
-                        {resume.projects.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                      <h4>Fact-safety gaps</h4>
-                      <ul>
-                        {(resume.gaps.length > 0 ? resume.gaps : ["No major required-skill gap detected from provided facts."]).map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <button type="button" onClick={handleDownloadPdf}>
-                      Download PDF
-                    </button>
-                  </>
-                ) : (
-                  <p className="emptyState">Select a job and generate a fact-based resume preview.</p>
-                )}
-              </article>
-            </section>
-          ) : null}
-        </section>
+      <section className="resume-layout">
+        <article className="profile-card accent-top">
+          <p className="small-caps">Tailored Resume</p>
+          <h2>Generate only from verified facts.</h2>
+          <p>
+            The preview rewrites positioning, reorders matched skills, and lists missing evidence instead of inventing
+            experience.
+          </p>
+          <div className="hero-actions">
+            <button className="button button-primary" type="button" onClick={handleGenerateResume} disabled={!selectedJob}>
+              Generate Resume
+            </button>
+            <button className="button button-secondary" type="button" onClick={handleDownloadPdf} disabled={!resume || !selectedJob}>
+              Download PDF
+            </button>
+          </div>
+        </article>
+
+        <article className="resume-preview">
+          {resume ? (
+            <>
+              <div className="resume-masthead">
+                <h2>{profile.name || "Candidate"}</h2>
+                <span>{[profile.email, profile.phone, profile.targetLocation].filter(Boolean).join(" · ")}</span>
+              </div>
+              <p className="resume-summary">{resume.summary}</p>
+              <div className="resume-sections">
+                <div className="resume-section-row">
+                  <span>Skills</span>
+                  <p>{resume.skills.join(", ") || "No skills provided."}</p>
+                </div>
+                <div className="resume-section-row">
+                  <span>Experience</span>
+                  <p>{resume.experience.join(" ")}</p>
+                </div>
+                <div className="resume-section-row">
+                  <span>Projects</span>
+                  <p>{resume.projects.join(" ")}</p>
+                </div>
+                <div className="resume-section-row">
+                  <span>Gaps</span>
+                  <p>
+                    {(resume.gaps.length > 0 ? resume.gaps : ["No major required-skill gap detected from provided facts."]).join(
+                      " ",
+                    )}
+                  </p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="resume-masthead">
+                <h2>Resume Preview</h2>
+                <span>Fixed template</span>
+              </div>
+              <p className="resume-summary">Select a job and generate a fact-based resume preview.</p>
+            </>
+          )}
+        </article>
       </section>
     </main>
   );
