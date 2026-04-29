@@ -1,42 +1,29 @@
-# Supabase Login Test
+# OfferPilot MVP
 
-A minimal Next.js app that tests Supabase Google login and a protected database write.
+A one-page Next.js MVP for the flow described in `OFFERPILOT_PLAN.md`.
 
-## Setup
+## What it does
 
-```bash
-pnpm install
-cp .env.example .env.local
-```
-
-Add your Supabase project URL and publishable key to `.env.local`.
-
-## Supabase
-
-1. Run `supabase/schema.sql` in the Supabase SQL Editor.
-2. In Supabase Dashboard, enable `Authentication > Providers > Google`.
-3. Add this redirect URL in Supabase Auth settings:
-
-```text
-http://localhost:3000/auth/callback
-```
-
-For production, also add:
-
-```text
-https://your-domain.com/auth/callback
-```
+- Accepts free-form background text and resume uploads (`.pdf`, `.md`, `.txt`).
+- Extracts a lightweight candidate profile with skills, role target, location, work mode, years of experience, and verified resume facts.
+- Asks follow-up questions when key job-search information is missing.
+- Uses a local fallback job dataset and ranks jobs by match score.
+- Shows job details, match reasoning, gaps, and risks outside the chat/input area.
+- Generates a fact-based tailored resume preview for the selected job.
+- Downloads a fixed-template PDF resume.
 
 ## Run
 
 ```bash
+pnpm install
 pnpm run dev
 ```
 
-Open http://localhost:3000. After Google login, enter text on the home page and save it. Refreshing the page should load the same text from `public.user_notes`.
+Open http://localhost:3000.
 
-## Typecheck
+## Verify
 
 ```bash
 pnpm run typecheck
+pnpm run build
 ```
