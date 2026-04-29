@@ -1,11 +1,13 @@
 "use client";
 
+import type { AuthChangeEvent, AuthError, Session, User } from "@supabase/supabase-js";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 import { fallbackJobs } from "../lib/jobs/fallback";
-import { extractSkills, includesWord, unique } from "../lib/jobs/skills";
 import { rankJobs } from "../lib/jobs/ranking";
+import { extractSkills, includesWord, unique } from "../lib/jobs/skills";
 import { RankedJob, WorkMode } from "../lib/jobs/types";
+import { getSupabaseBrowserClient } from "../lib/supabase/browser";
 
 type ActiveTab = "cv" | "jobs";
 type MessageRole = "agent" | "user";
@@ -50,6 +52,17 @@ type ProviderSearchStatus = {
   ok: boolean;
   count: number;
   error?: string;
+};
+
+type AuthStatus = "checking" | "ready" | "working";
+
+type AgentApiResponse = {
+  reply?: string;
+  profilePatch?: Partial<CandidateProfile>;
+  usedOpenAI?: boolean;
+  model?: string;
+  error?: string;
+  detail?: string;
 };
 
 type JobSearchResponse = {
@@ -224,11 +237,13 @@ async function readPdfText(file: File) {
 
 function getMissingInfo(profile: CandidateProfile) {
   const missing: string[] = [];
-  if (!profile.targetRole) missing.push("Target role");
-  if (!profile.targetLocation) missing.push("Target location");
-  if (!profile.workMode) missing.push("Remote / hybrid / onsite preference");
-  if (!profile.yearsExperience) missing.push("Years of experience");
-  if (profile.skills.length === 0) missing.push("Core skills");
+  const hasResumeEvidence =
+    Boolean(profile.uploadNote) ||
+    profile.experienceFacts.length > 0 ||
+    profile.projectFacts.length > 0 ||
+    profile.educationFacts.length > 0;
+
+  if (!hasResumeEvidence) missing.push("Resume");
   return missing;
 }
 
@@ -349,13 +364,56 @@ function downloadBlob(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
-function formatProfileSummary(profile: CandidateProfile) {
-  return [
-    profile.targetRole || "Role not set",
-    profile.targetLocation || "Location not set",
-    profile.workMode || "Work mode not set",
-    profile.yearsExperience ? `${profile.yearsExperience} years` : "Years not set",
+function getUserAvatar(user: User | null) {
+  const metadata = user?.user_metadata;
+  const avatar = metadata?.avatar_url ?? metadata?.picture;
+  return typeof avatar === "string" ? avatar : "";
+}
+
+function getUserName(user: User | null) {
+  const metadata = user?.user_metadata;
+  const name = metadata?.full_name ?? metadata?.name ?? user?.email;
+  return typeof name === "string" ? name : "Signed in user";
+}
+
+function getUserInitial(user: User | null) {
+  return getUserName(user).trim().charAt(0).toUpperCase() || "U";
+}
+
+function mergeProfilePatch(base: CandidateProfile, patch?: Partial<CandidateProfile>): CandidateProfile {
+  if (!patch) return base;
+
+  const next = { ...base };
+  const stringKeys: Array<keyof Pick<
+    CandidateProfile,
+    "name" | "email" | "phone" | "targetRole" | "targetLocation" | "yearsExperience" | "authorization"
+  >> = ["name", "email", "phone", "targetRole", "targetLocation", "yearsExperience", "authorization"];
+  const arrayKeys: Array<keyof Pick<CandidateProfile, "skills" | "experienceFacts" | "projectFacts" | "educationFacts">> = [
+    "skills",
+    "experienceFacts",
+    "projectFacts",
+    "educationFacts",
   ];
+
+  stringKeys.forEach((key) => {
+    const value = patch[key];
+    if (typeof value === "string" && value.trim()) {
+      next[key] = value.trim();
+    }
+  });
+
+  if (patch.workMode === "remote" || patch.workMode === "hybrid" || patch.workMode === "onsite") {
+    next.workMode = patch.workMode;
+  }
+
+  arrayKeys.forEach((key) => {
+    const value = patch[key];
+    if (Array.isArray(value) && value.length > 0) {
+      next[key] = unique([...next[key], ...value.map((item) => item.trim()).filter(Boolean)]);
+    }
+  });
+
+  return next;
 }
 
 function formatSource(source: RankedJob["source"] | ProviderSearchStatus["source"]) {
@@ -387,9 +445,52 @@ export default function Home() {
   const [resume, setResume] = useState<TailoredResume | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
   const [searchStatus, setSearchStatus] = useState("Waiting for instructions");
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
+  const [authError, setAuthError] = useState("");
+  const [authMenuOpen, setAuthMenuOpen] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
 
   const missingInfo = useMemo(() => getMissingInfo(profile), [profile]);
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
+  const userAvatar = getUserAvatar(authUser);
+  const userName = getUserName(authUser);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+
+      supabase.auth.getSession().then(({ data, error }: { data: { session: Session | null }; error: AuthError | null }) => {
+        if (!isMounted) return;
+        if (error) {
+          setAuthError(error.message);
+        }
+        setAuthUser(data.session?.user ?? null);
+        setAuthStatus("ready");
+      });
+
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
+        setAuthUser(session?.user ?? null);
+        setAuthStatus("ready");
+        setAuthMenuOpen(false);
+      });
+
+      return () => {
+        isMounted = false;
+        subscription.unsubscribe();
+      };
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to initialize authentication.");
+      setAuthStatus("ready");
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -418,10 +519,57 @@ export default function Home() {
     setProfile((current) => ({ ...current, ...next }));
   }
 
-  async function completeSearch(nextProfile: CandidateProfile) {
+  async function handleGoogleSignIn() {
+    setAuthError("");
+    setAuthMenuOpen(false);
+    setAuthStatus("working");
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+
+      if (error) {
+        setAuthError(error.message);
+        setAuthStatus("ready");
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to start Google sign in.");
+      setAuthStatus("ready");
+    }
+  }
+
+  async function handleSignOut() {
+    setAuthError("");
+    setAuthMenuOpen(false);
+    setAuthStatus("working");
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        setAuthError(error.message);
+      } else {
+        setAuthUser(null);
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to sign out.");
+    } finally {
+      setAuthStatus("ready");
+    }
+  }
+
+  async function completeSearch(nextProfile: CandidateProfile, options?: { suppressMessage?: boolean }) {
     setActiveTab("jobs");
     setSearchStatus("Searching Adzuna and Google Jobs");
-    addMessage("agent", "Searching Adzuna first and Google Jobs as a supplemental source.", "status");
+    if (!options?.suppressMessage) {
+      addMessage("agent", "Searching Adzuna first and Google Jobs as a supplemental source.", "status");
+    }
 
     try {
       const response = await fetch(`/api/jobs/search?${buildSearchParams(nextProfile).toString()}`);
@@ -444,22 +592,26 @@ export default function Home() {
       setSelectedJobId(ranked[0]?.id ?? "");
       setResume(null);
       setSearchStatus(`Ranked ${ranked.length} jobs from ${sourceSummary}`);
-      addMessage("agent", `I found and ranked ${ranked.length} roles from ${sourceSummary}. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+      if (!options?.suppressMessage) {
+        addMessage("agent", `I found and ranked ${ranked.length} roles from ${sourceSummary}. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+      }
     } catch (error) {
       const ranked = rankJobs(fallbackJobs, nextProfile);
       setJobs(ranked);
       setSelectedJobId(ranked[0]?.id ?? "");
       setResume(null);
       setSearchStatus(`Ranked ${ranked.length} jobs with fallback dataset`);
-      addMessage(
-        "agent",
-        `Real job search was unavailable, so I ranked the fallback dataset instead. ${error instanceof Error ? error.message : "Unknown error"}`,
-        "status",
-      );
+      if (!options?.suppressMessage) {
+        addMessage(
+          "agent",
+          `Real job search was unavailable, so I ranked the fallback dataset instead. ${error instanceof Error ? error.message : "Unknown error"}`,
+          "status",
+        );
+      }
     }
   }
 
-  async function evaluateProfileForSearch(nextProfile: CandidateProfile) {
+  async function evaluateProfileForSearch(nextProfile: CandidateProfile, options?: { suppressMessage?: boolean }) {
     const missing = getMissingInfo(nextProfile);
     setProfile(nextProfile);
     setResume(null);
@@ -467,12 +619,14 @@ export default function Home() {
     if (missing.length > 0) {
       setJobs([]);
       setSelectedJobId("");
-      setSearchStatus(`Needs ${missing.length} missing details`);
-      addMessage("agent", `I need ${missing.join(", ")} before I can search and rank jobs.`, "missing-info");
+      setSearchStatus("Resume needed");
+      if (!options?.suppressMessage) {
+        addMessage("agent", "Upload a resume or paste resume text so I can rank jobs and tailor applications from verified facts.", "missing-info");
+      }
       return;
     }
 
-    await completeSearch(nextProfile);
+    await completeSearch(nextProfile, options);
   }
 
   async function loadImportedJobs(options: { silentIfEmpty?: boolean } = {}) {
@@ -602,21 +756,57 @@ export default function Home() {
     addMessage("agent", "I loaded the resume text and updated your profile facts.", "status");
   }
 
-  function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const prompt = chatInput.trim();
     if (!prompt) return;
 
     setChatInput("");
     addMessage("user", prompt);
-    const nextProfile = parseProfile(prompt, profile);
-    void evaluateProfileForSearch(nextProfile);
-  }
+    setSearchStatus("Thinking with GPT");
+    setIsThinking(true);
 
-  function handleMissingInfoSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextProfile = parseProfile("", profile);
-    void evaluateProfileForSearch(nextProfile);
+    const locallyParsedProfile = parseProfile(prompt, profile);
+
+    try {
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: prompt,
+          profile: locallyParsedProfile,
+          missingInfo: getMissingInfo(locallyParsedProfile),
+        }),
+      });
+      const data = (await response.json()) as AgentApiResponse;
+
+      if (!response.ok || data.error) {
+        throw new Error(data.detail || data.error || "GPT request failed.");
+      }
+
+      const nextProfile = mergeProfilePatch(locallyParsedProfile, data.profilePatch);
+      const missing = getMissingInfo(nextProfile);
+      const reply =
+        data.reply ||
+        (data.usedOpenAI ? "I updated the profile with GPT and will continue the workflow." : "I used the local parser and will continue the workflow.");
+
+      addMessage("agent", reply, missing.length > 0 ? "missing-info" : "status");
+      await evaluateProfileForSearch(nextProfile, { suppressMessage: true });
+    } catch (error) {
+      const nextProfile = locallyParsedProfile;
+      addMessage(
+        "agent",
+        error instanceof Error
+          ? `GPT is unavailable right now, so I used the local parser instead. ${error.message}`
+          : "GPT is unavailable right now, so I used the local parser instead.",
+        "status",
+      );
+      await evaluateProfileForSearch(nextProfile);
+    } finally {
+      setIsThinking(false);
+    }
   }
 
   function handleSelectJob(jobId: string) {
@@ -671,15 +861,46 @@ export default function Home() {
     addMessage("agent", "Downloaded the fixed-template PDF resume.", "status");
   }
 
-  const profileSummary = formatProfileSummary(profile);
   const latestMissingMessage = messages.some((message) => message.kind === "missing-info") && missingInfo.length > 0;
 
   return (
     <main className="agent-shell">
       <aside className="sidebar" aria-label="OfferPilot workspace">
         <div className="brand-block">
+          <div className="auth-control">
+            {authUser ? (
+              <>
+                <button
+                  className="avatar-button"
+                  type="button"
+                  onClick={() => setAuthMenuOpen((current) => !current)}
+                  title={userName}
+                  aria-label={`${userName} account menu`}
+                  aria-expanded={authMenuOpen}
+                >
+                  {userAvatar ? <img src={userAvatar} alt="" referrerPolicy="no-referrer" /> : <span>{getUserInitial(authUser)}</span>}
+                </button>
+                {authMenuOpen ? (
+                  <div className="auth-popover" role="menu">
+                    <div>
+                      <strong>{userName}</strong>
+                      {authUser.email ? <span>{authUser.email}</span> : null}
+                    </div>
+                    <button type="button" onClick={handleSignOut} role="menuitem">
+                      Log out
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <button className="google-login-button" type="button" onClick={handleGoogleSignIn} disabled={authStatus !== "ready"}>
+                {authStatus === "checking" ? "Checking" : authStatus === "working" ? "Opening" : "Log in"}
+              </button>
+            )}
+          </div>
           <span className="wordmark">OfferPilot</span>
           <p>Autonomous job search and tailored resume generation.</p>
+          {authError ? <p className="auth-error">{authError}</p> : null}
         </div>
 
         <div className="sidebar-tabs" role="tablist" aria-label="Workspace sections">
@@ -705,12 +926,6 @@ export default function Home() {
             onChange={handleFileChange}
           />
           <p className="panel-note">{profile.uploadNote || "No CV uploaded yet. Chat instructions can still start the profile."}</p>
-
-          <div className="profile-facts">
-            {profileSummary.map((item) => (
-              <span key={item}>{item}</span>
-            ))}
-          </div>
 
           <div className="fact-list">
             <p className="small-caps">Detected Skills</p>
@@ -773,56 +988,27 @@ export default function Home() {
           ))}
 
           {latestMissingMessage ? (
-            <form className="missing-card" onSubmit={handleMissingInfoSubmit}>
+            <section className="missing-card" aria-label="Resume needed">
               <div>
-                <p className="small-caps">Missing Information</p>
-                <h2>Complete the search profile.</h2>
+                <p className="small-caps">Resume Needed</p>
+                <h2>Upload a resume to continue.</h2>
+                <p>OfferPilot needs resume text before ranking jobs or tailoring applications from verified facts.</p>
               </div>
-              <div className="missing-grid">
-                <label>
-                  Target role
-                  <input value={profile.targetRole} onChange={(event) => updateProfile({ targetRole: event.target.value })} placeholder="Software Engineer" />
-                </label>
-                <label>
-                  Target location
-                  <input value={profile.targetLocation} onChange={(event) => updateProfile({ targetLocation: event.target.value })} placeholder="Sydney" />
-                </label>
-                <label>
-                  Years
-                  <input value={profile.yearsExperience} onChange={(event) => updateProfile({ yearsExperience: event.target.value })} placeholder="4" />
-                </label>
-                <label>
-                  Core skills
-                  <input
-                    value={profile.skills.join(", ")}
-                    onChange={(event) =>
-                      updateProfile({
-                        skills: event.target.value
-                          .split(",")
-                          .map((item) => item.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    placeholder="React, TypeScript, Node.js"
-                  />
-                </label>
+              <label className="primary-action upload-action" htmlFor="resumeUpload">
+                Upload CV
+              </label>
+            </section>
+          ) : null}
+
+          {isThinking ? (
+            <article className="message agent loading-message" aria-label="OfferPilot is thinking">
+              <span>AI</span>
+              <div className="typing-indicator" aria-hidden="true">
+                <i />
+                <i />
+                <i />
               </div>
-              <div className="work-mode-row" aria-label="Work mode">
-                {(["remote", "hybrid", "onsite"] as const).map((mode) => (
-                  <button
-                    className={profile.workMode === mode ? "chip-button active" : "chip-button"}
-                    type="button"
-                    key={mode}
-                    onClick={() => updateProfile({ workMode: mode })}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-              <button className="primary-action" type="submit">
-                Continue Search
-              </button>
-            </form>
+            </article>
           ) : null}
         </div>
 
@@ -832,9 +1018,10 @@ export default function Home() {
             onChange={(event) => setChatInput(event.target.value)}
             placeholder="Example: I want software jobs in Sydney"
             aria-label="Chat with OfferPilot"
+            disabled={isThinking}
           />
           <button className="primary-action" type="submit">
-            Send
+            {isThinking ? "Thinking" : "Send"}
           </button>
         </form>
       </section>
@@ -848,7 +1035,7 @@ export default function Home() {
         {jobs.length === 0 ? (
           <section className="empty-state">
             <p>No ranked jobs yet.</p>
-            <span>{missingInfo.length > 0 ? `Missing: ${missingInfo.join(", ")}` : "Send an instruction to start search."}</span>
+            <span>{missingInfo.length > 0 ? "Upload a resume or paste resume text to start." : "Send an instruction to start search."}</span>
           </section>
         ) : (
           <section className="job-results">
