@@ -605,9 +605,9 @@ export default function Home() {
           OfferPilot
         </Link>
         <div className="nav-links">
-          <Link href="/jobs">Jobs</Link>
-          <Link href="/resume">Resume</Link>
-          <Link href="/profile">Profile</Link>
+          <Link href="#profile">Profile</Link>
+          <Link href="#jobs">Jobs</Link>
+          <Link href="#resume">Resume</Link>
         </div>
         <button className="nav-action" type="button" onClick={handleStartAgent}>
           Start Agent
@@ -670,7 +670,7 @@ export default function Home() {
         </aside>
       </section>
 
-      <section className="profile-layout">
+      <section className="profile-layout" id="profile">
         <article className="profile-card accent-top">
           <p className="small-caps">Profile Controls</p>
           <h2>Complete the search profile.</h2>
@@ -726,7 +726,7 @@ export default function Home() {
         </article>
       </section>
 
-      <section className="section-block">
+      <section className="section-block" id="jobs">
         <div className="section-label">
           <span />
           <p>Job Matches</p>
@@ -795,7 +795,7 @@ export default function Home() {
         )}
       </section>
 
-      <section className="resume-layout">
+      <section className="resume-layout" id="resume">
         <article className="profile-card accent-top">
           <p className="small-caps">Tailored Resume</p>
           <h2>Generate only from verified facts.</h2>
