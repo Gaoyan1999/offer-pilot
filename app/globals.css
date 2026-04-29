@@ -452,6 +452,18 @@ p {
   color: var(--accent);
 }
 
+.chat-header-actions {
+  display: grid;
+  width: min(240px, 100%);
+  gap: 10px;
+}
+
+.header-action {
+  min-height: 42px;
+  width: 100%;
+  white-space: nowrap;
+}
+
 .status-pill {
   max-width: 235px;
   border: 1px solid rgba(0, 82, 255, 0.22);
@@ -666,6 +678,16 @@ input::placeholder {
   color: var(--accent);
   background: var(--muted);
   box-shadow: var(--shadow-md);
+}
+
+.sidebar-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.sidebar-action {
+  min-height: 44px;
+  width: 100%;
 }
 
 .context-panel {
@@ -987,6 +1009,10 @@ input::placeholder {
 
   .status-pill {
     max-width: none;
+    width: 100%;
+  }
+
+  .chat-header-actions {
     width: 100%;
   }
 

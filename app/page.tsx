@@ -1,8 +1,12 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
-type WorkMode = "remote" | "hybrid" | "onsite" | "";
+import { fallbackJobs } from "../lib/jobs/fallback";
+import { extractSkills, includesWord, unique } from "../lib/jobs/skills";
+import { rankJobs } from "../lib/jobs/ranking";
+import { RankedJob, WorkMode } from "../lib/jobs/types";
+
 type ActiveTab = "cv" | "jobs";
 type MessageRole = "agent" | "user";
 type MessageKind = "text" | "missing-info" | "status";
@@ -31,26 +35,6 @@ type CandidateProfile = {
   uploadNote: string;
 };
 
-type Job = {
-  id: string;
-  title: string;
-  company: string;
-  location: string;
-  workMode: Exclude<WorkMode, "">;
-  source: string;
-  url: string;
-  description: string;
-  requiredSkills: string[];
-  niceToHave: string[];
-};
-
-type RankedJob = Job & {
-  matchScore: number;
-  matchRationale: string[];
-  gaps: string[];
-  risks: string[];
-};
-
 type TailoredResume = {
   summary: string;
   skills: string[];
@@ -61,105 +45,23 @@ type TailoredResume = {
   gaps: string[];
 };
 
-const knownSkills = [
-  "React",
-  "Next.js",
-  "TypeScript",
-  "JavaScript",
-  "Node.js",
-  "Python",
-  "SQL",
-  "Postgres",
-  "Supabase",
-  "OpenAI",
-  "LLM",
-  "AI",
-  "RAG",
-  "Prompt Engineering",
-  "Product Management",
-  "Figma",
-  "Analytics",
-  "AWS",
-  "Docker",
-  "GraphQL",
-  "REST",
-  "Tailwind",
-  "CSS",
-  "HTML",
-  "Testing",
-  "Playwright",
-  "Cypress",
-  "Data Analysis",
-  "Machine Learning",
-];
+type ProviderSearchStatus = {
+  source: "adzuna" | "google_jobs";
+  ok: boolean;
+  count: number;
+  error?: string;
+};
 
-const mockJobs: Job[] = [
-  {
-    id: "ai-product-engineer-canva",
-    title: "AI Product Engineer",
-    company: "Canva",
-    location: "Sydney, Australia",
-    workMode: "hybrid",
-    source: "Fallback dataset",
-    url: "https://www.canva.com/careers/",
-    description:
-      "Build AI-assisted product workflows with React, TypeScript, experimentation, and close collaboration with product and design teams.",
-    requiredSkills: ["React", "TypeScript", "AI", "Product Management", "Analytics"],
-    niceToHave: ["OpenAI", "Prompt Engineering", "Figma", "Testing"],
-  },
-  {
-    id: "full-stack-ai-atlassian",
-    title: "Full Stack Engineer, AI Platform",
-    company: "Atlassian",
-    location: "Remote - Australia",
-    workMode: "remote",
-    source: "Fallback dataset",
-    url: "https://www.atlassian.com/company/careers",
-    description:
-      "Develop AI platform features across frontend and backend services. Role uses TypeScript, Node.js, REST APIs, telemetry, and product iteration.",
-    requiredSkills: ["TypeScript", "Node.js", "React", "REST", "AI"],
-    niceToHave: ["OpenAI", "AWS", "Analytics", "Testing"],
-  },
-  {
-    id: "frontend-ai-startup",
-    title: "Frontend Engineer, AI Tools",
-    company: "Northstar Labs",
-    location: "Melbourne, Australia",
-    workMode: "hybrid",
-    source: "Fallback dataset",
-    url: "https://example.com/jobs/frontend-ai-tools",
-    description:
-      "Own UX-heavy AI tooling for internal operators. Requires strong frontend fundamentals, React, TypeScript, CSS, and pragmatic product judgment.",
-    requiredSkills: ["React", "TypeScript", "CSS", "AI"],
-    niceToHave: ["Playwright", "Prompt Engineering", "Analytics"],
-  },
-  {
-    id: "backend-data-sydney",
-    title: "Backend Engineer, Data Products",
-    company: "Harbour Data",
-    location: "Sydney, Australia",
-    workMode: "onsite",
-    source: "Fallback dataset",
-    url: "https://example.com/jobs/backend-data-products",
-    description:
-      "Build backend APIs for data products using Python, SQL, Postgres, Docker, and cloud deployment practices.",
-    requiredSkills: ["Python", "SQL", "Postgres", "Docker", "REST"],
-    niceToHave: ["AWS", "Data Analysis", "Testing"],
-  },
-  {
-    id: "product-engineer-remote",
-    title: "Product Engineer",
-    company: "RelayWorks",
-    location: "Remote - APAC",
-    workMode: "remote",
-    source: "Fallback dataset",
-    url: "https://example.com/jobs/product-engineer",
-    description:
-      "Ship customer-facing features end to end with React, Next.js, Node.js, SQL, and direct product discovery with users.",
-    requiredSkills: ["React", "Next.js", "Node.js", "SQL", "Product Management"],
-    niceToHave: ["Supabase", "Analytics", "Figma"],
-  },
-];
+type JobSearchResponse = {
+  jobs: RankedJob[];
+  fallback: boolean;
+  providers: ProviderSearchStatus[];
+};
+
+type ImportedJobsResponse = {
+  jobs: RankedJob[];
+  count: number;
+};
 
 const seedMessages: ChatMessage[] = [
   {
@@ -170,10 +72,6 @@ const seedMessages: ChatMessage[] = [
       "Tell me what kind of role you want, upload a CV, or ask me to search. I will collect missing details before ranking jobs.",
   },
 ];
-
-function unique(values: string[]) {
-  return Array.from(new Set(values.filter(Boolean)));
-}
 
 function getInitialProfile(): CandidateProfile {
   return {
@@ -192,14 +90,6 @@ function getInitialProfile(): CandidateProfile {
     educationFacts: [],
     uploadNote: "",
   };
-}
-
-function includesWord(text: string, value: string) {
-  return text.toLowerCase().includes(value.toLowerCase());
-}
-
-function extractSkills(text: string) {
-  return knownSkills.filter((skill) => includesWord(text, skill));
 }
 
 function extractName(text: string) {
@@ -342,41 +232,6 @@ function getMissingInfo(profile: CandidateProfile) {
   return missing;
 }
 
-function scoreJob(job: Job, profile: CandidateProfile): RankedJob {
-  const matchedSkills = job.requiredSkills.filter((skill) => profile.skills.some((candidateSkill) => includesWord(candidateSkill, skill)));
-  const niceMatches = job.niceToHave.filter((skill) => profile.skills.some((candidateSkill) => includesWord(candidateSkill, skill)));
-  const roleMatch = profile.targetRole && includesWord(job.title, profile.targetRole.split(" ")[0] ?? "") ? 16 : 0;
-  const locationMatch =
-    profile.workMode === "remote" && job.workMode === "remote"
-      ? 18
-      : profile.targetLocation && includesWord(job.location, profile.targetLocation.split(" / ")[0] ?? "")
-        ? 14
-        : 0;
-  const skillScore = matchedSkills.length * 10 + niceMatches.length * 4;
-  const experienceScore = profile.yearsExperience ? 8 : 0;
-  const matchScore = Math.min(98, 35 + roleMatch + locationMatch + skillScore + experienceScore);
-  const missingRequired = job.requiredSkills.filter((skill) => !matchedSkills.includes(skill));
-
-  return {
-    ...job,
-    matchScore,
-    matchRationale: [
-      matchedSkills.length > 0 ? `Matched required skills: ${matchedSkills.join(", ")}.` : "No direct required-skill match found yet.",
-      niceMatches.length > 0 ? `Also matches nice-to-have skills: ${niceMatches.join(", ")}.` : "Nice-to-have overlap is limited.",
-      locationMatch > 0 ? `Location/work mode preference is aligned with ${job.location}.` : "Location/work mode needs confirmation.",
-    ],
-    gaps: missingRequired.length > 0 ? missingRequired : ["No major required-skill gap detected from provided facts."],
-    risks: [
-      profile.authorization ? `Work authorization noted: ${profile.authorization}.` : "Work authorization has not been provided.",
-      missingRequired.length > 2 ? "Several required skills were not found in the uploaded facts." : "Tailoring should stay within verified facts.",
-    ],
-  };
-}
-
-function rankJobs(profile: CandidateProfile) {
-  return mockJobs.map((job) => scoreJob(job, profile)).sort((a, b) => b.matchScore - a.matchScore);
-}
-
 function buildTailoredResume(profile: CandidateProfile, job: RankedJob): TailoredResume {
   const relevantSkills = unique([
     ...job.requiredSkills.filter((skill) => profile.skills.some((candidateSkill) => includesWord(candidateSkill, skill))),
@@ -503,6 +358,26 @@ function formatProfileSummary(profile: CandidateProfile) {
   ];
 }
 
+function formatSource(source: RankedJob["source"] | ProviderSearchStatus["source"]) {
+  if (source === "adzuna") return "Adzuna";
+  if (source === "google_jobs") return "Google Jobs";
+  if (source === "linkedin") return "LinkedIn";
+  if (source === "seek") return "SEEK";
+  if (source === "indeed") return "Indeed";
+  if (source === "browser_extension") return "Browser Extension";
+  return "Fallback";
+}
+
+function buildSearchParams(profile: CandidateProfile) {
+  return new URLSearchParams({
+    targetRole: profile.targetRole,
+    targetLocation: profile.targetLocation,
+    workMode: profile.workMode,
+    yearsExperience: profile.yearsExperience,
+    skills: profile.skills.join(","),
+  });
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("cv");
   const [chatInput, setChatInput] = useState("");
@@ -515,6 +390,17 @@ export default function Home() {
 
   const missingInfo = useMemo(() => getMissingInfo(profile), [profile]);
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("importedJobs") !== "1") return;
+
+    params.delete("importedJobs");
+    const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
+    window.history.replaceState({}, "", nextUrl);
+    void loadImportedJobs({ silentIfEmpty: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function addMessage(role: MessageRole, content: string, kind: MessageKind = "text") {
     setMessages((current) => [
@@ -532,17 +418,48 @@ export default function Home() {
     setProfile((current) => ({ ...current, ...next }));
   }
 
-  function completeSearch(nextProfile: CandidateProfile) {
-    const ranked = rankJobs(nextProfile);
-    setJobs(ranked);
-    setSelectedJobId(ranked[0]?.id ?? "");
-    setResume(null);
+  async function completeSearch(nextProfile: CandidateProfile) {
     setActiveTab("jobs");
-    setSearchStatus(`Ranked ${ranked.length} jobs with fallback dataset`);
-    addMessage("agent", `I found and ranked ${ranked.length} roles. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+    setSearchStatus("Searching Adzuna and Google Jobs");
+    addMessage("agent", "Searching Adzuna first and Google Jobs as a supplemental source.", "status");
+
+    try {
+      const response = await fetch(`/api/jobs/search?${buildSearchParams(nextProfile).toString()}`);
+      if (!response.ok) {
+        throw new Error(`Job search failed with ${response.status}`);
+      }
+
+      const result = (await response.json()) as JobSearchResponse;
+      if (!Array.isArray(result.jobs)) {
+        throw new Error("Job search returned an invalid response.");
+      }
+
+      const ranked = result.jobs;
+      const activeProviders = result.providers.filter((provider) => provider.ok && provider.count > 0);
+      const sourceSummary = result.fallback
+        ? "fallback dataset"
+        : activeProviders.map((provider) => `${formatSource(provider.source)} (${provider.count})`).join(" and ") || "real job sources";
+
+      setJobs(ranked);
+      setSelectedJobId(ranked[0]?.id ?? "");
+      setResume(null);
+      setSearchStatus(`Ranked ${ranked.length} jobs from ${sourceSummary}`);
+      addMessage("agent", `I found and ranked ${ranked.length} roles from ${sourceSummary}. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+    } catch (error) {
+      const ranked = rankJobs(fallbackJobs, nextProfile);
+      setJobs(ranked);
+      setSelectedJobId(ranked[0]?.id ?? "");
+      setResume(null);
+      setSearchStatus(`Ranked ${ranked.length} jobs with fallback dataset`);
+      addMessage(
+        "agent",
+        `Real job search was unavailable, so I ranked the fallback dataset instead. ${error instanceof Error ? error.message : "Unknown error"}`,
+        "status",
+      );
+    }
   }
 
-  function evaluateProfileForSearch(nextProfile: CandidateProfile) {
+  async function evaluateProfileForSearch(nextProfile: CandidateProfile) {
     const missing = getMissingInfo(nextProfile);
     setProfile(nextProfile);
     setResume(null);
@@ -555,7 +472,91 @@ export default function Home() {
       return;
     }
 
-    completeSearch(nextProfile);
+    await completeSearch(nextProfile);
+  }
+
+  async function loadImportedJobs(options: { silentIfEmpty?: boolean } = {}) {
+    setActiveTab("jobs");
+    setSearchStatus("Loading browser-imported jobs");
+
+    try {
+      const response = await fetch(`/api/jobs/import?${buildSearchParams(profile).toString()}`);
+      if (!response.ok) {
+        throw new Error(`Imported job load failed with ${response.status}`);
+      }
+
+      const result = (await response.json()) as ImportedJobsResponse;
+      if (!Array.isArray(result.jobs) || result.jobs.length === 0) {
+        setSearchStatus("No browser-imported jobs found");
+        if (!options.silentIfEmpty) {
+          addMessage("agent", "No imported jobs are available yet. Use the Chrome extension on a job search page, then load imported jobs again.", "status");
+        }
+        return;
+      }
+
+      setJobs(result.jobs);
+      setSelectedJobId(result.jobs[0]?.id ?? "");
+      setResume(null);
+      setSearchStatus(`Ranked ${result.jobs.length} browser-imported jobs`);
+      addMessage("agent", `Loaded and ranked ${result.jobs.length} jobs imported from your browser.`, "status");
+    } catch (error) {
+      setSearchStatus("Imported job load failed");
+      addMessage("agent", error instanceof Error ? error.message : "Could not load imported jobs.", "status");
+    }
+  }
+
+  async function handleLoadImportedJobs() {
+    await loadImportedJobs();
+  }
+
+  function handleSearchWithExtension() {
+    setActiveTab("jobs");
+    setSearchStatus("Waiting for Chrome extension");
+
+    const timeout = window.setTimeout(() => {
+      setSearchStatus("Chrome extension not detected");
+      addMessage("agent", "I could not detect the OfferPilot Chrome extension. Load the extension, refresh this page, and try again.", "status");
+      window.removeEventListener("message", handleExtensionResponse);
+    }, 2200);
+
+    function handleExtensionResponse(event: MessageEvent) {
+      if (event.source !== window || event.data?.source !== "offerpilot-extension" || event.data.type !== "OFFERPILOT_EXTENSION_SEARCH_STARTED") {
+        return;
+      }
+
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", handleExtensionResponse);
+
+      const payload = event.data.payload as { ok?: boolean; count?: number; error?: string };
+      if (!payload.ok) {
+        setSearchStatus("Extension search failed to start");
+        addMessage("agent", payload.error || "The Chrome extension could not start the search.", "status");
+        return;
+      }
+
+      setSearchStatus("Extension search preview opened");
+      addMessage(
+        "agent",
+        `The Chrome extension opened LinkedIn with the OfferPilot panel on the right and found ${payload.count ?? 0} jobs. Confirm jobs in the side panel and I will load them here automatically.`,
+        "status",
+      );
+    }
+
+    window.addEventListener("message", handleExtensionResponse);
+    window.postMessage(
+      {
+        source: "offerpilot-web",
+        type: "OFFERPILOT_START_EXTENSION_SEARCH",
+        payload: {
+          targetRole: profile.targetRole || "Software Engineer",
+          targetLocation: profile.targetLocation || "Sydney",
+          workMode: profile.workMode,
+          yearsExperience: profile.yearsExperience,
+          skills: profile.skills,
+        },
+      },
+      "*",
+    );
   }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -609,13 +610,13 @@ export default function Home() {
     setChatInput("");
     addMessage("user", prompt);
     const nextProfile = parseProfile(prompt, profile);
-    evaluateProfileForSearch(nextProfile);
+    void evaluateProfileForSearch(nextProfile);
   }
 
   function handleMissingInfoSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextProfile = parseProfile("", profile);
-    evaluateProfileForSearch(nextProfile);
+    void evaluateProfileForSearch(nextProfile);
   }
 
   function handleSelectJob(jobId: string) {
@@ -738,6 +739,14 @@ export default function Home() {
             <p className="small-caps">Resume</p>
             <p>{resume ? "Tailored preview generated." : "Select a job to generate a tailored PDF resume."}</p>
           </div>
+          <div className="sidebar-actions">
+            <button className="primary-action sidebar-action" type="button" onClick={handleSearchWithExtension}>
+              Search with Extension
+            </button>
+            <button className="secondary-action sidebar-action" type="button" onClick={handleLoadImportedJobs}>
+              Load Imported Jobs
+            </button>
+          </div>
         </section>
       </aside>
 
@@ -747,7 +756,12 @@ export default function Home() {
             <p className="small-caps">Agent Chat</p>
             <h1>Tell OfferPilot what to do.</h1>
           </div>
-          <div className="status-pill">{searchStatus}</div>
+          <div className="chat-header-actions">
+            <button className="primary-action header-action" type="button" onClick={handleSearchWithExtension}>
+              Search with Extension
+            </button>
+            <div className="status-pill">{searchStatus}</div>
+          </div>
         </header>
 
         <div className="message-list" aria-live="polite">
@@ -844,7 +858,7 @@ export default function Home() {
                   <span>{job.matchScore}</span>
                   <div>
                     <strong>{job.title}</strong>
-                    <p>{job.company} - {job.location}</p>
+                    <p>{job.company} - {job.location} - {formatSource(job.source)}</p>
                   </div>
                 </button>
               ))}
@@ -856,7 +870,7 @@ export default function Home() {
                   <div>
                     <p className="small-caps">Match Detail</p>
                     <h3>{selectedJob.title}</h3>
-                    <p>{selectedJob.company} - {selectedJob.location} - {selectedJob.workMode}</p>
+                    <p>{selectedJob.company} - {selectedJob.location} - {selectedJob.workMode} - {formatSource(selectedJob.source)}</p>
                   </div>
                   <strong>{selectedJob.matchScore}</strong>
                 </div>

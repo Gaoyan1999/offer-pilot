@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OfferPilot Importer</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>OfferPilot</strong>
+        <span>Job Importer</span>
+      </header>
+
+      <section class="primary-panel">
+        <p>Start the browser search from the OfferPilot website.</p>
+        <button id="openOfferPilot" type="button">Open OfferPilot</button>
+      </section>
+
+      <details>
+        <summary>Advanced manual import</summary>
+
+        <label>
+          Import API
+          <input id="endpoint" type="url" />
+        </label>
+
+        <button id="saveEndpoint" type="button">Save API</button>
+        <button id="importVisible" type="button">Import Visible Jobs</button>
+        <button id="importCurrent" type="button">Import Current Detail</button>
+      </details>
+
+      <p id="status" role="status">Open OfferPilot and click Search with Extension.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

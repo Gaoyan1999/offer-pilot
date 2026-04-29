@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "OfferPilot Job Importer",
+  "description": "Import visible job listings and current job details into OfferPilot.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": ["activeTab", "storage", "tabs", "scripting", "sidePanel"],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.linkedin.com/*",
+    "https://*.seek.com.au/*",
+    "https://*.indeed.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "preview.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["site-bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.linkedin.com/*", "https://*.seek.com.au/*", "https://*.indeed.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
