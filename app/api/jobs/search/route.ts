@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { fallbackJobs } from "../../../../lib/jobs/fallback";
+import { rankJobsWithAgent } from "../../../../lib/jobs/ai-ranking";
 import { dedupeJobs } from "../../../../lib/jobs/normalize";
 import { fetchAdzunaJobs } from "../../../../lib/jobs/providers/adzuna";
 import { fetchSerpApiJobs } from "../../../../lib/jobs/providers/serpapi";
-import { rankJobs } from "../../../../lib/jobs/ranking";
 import { Job, JobSearchProfile, WorkMode } from "../../../../lib/jobs/types";
 
 export const runtime = "nodejs";
@@ -79,11 +79,16 @@ export async function GET(request: NextRequest) {
 
   const realJobs = dedupeJobs([...adzuna.jobs, ...serpApi.jobs]);
   const jobs = realJobs.length > 0 ? realJobs : fallbackJobs;
-  const rankedJobs = rankJobs(jobs, profile);
+  const ranking = await rankJobsWithAgent(jobs, profile);
 
   return NextResponse.json({
-    jobs: rankedJobs,
+    jobs: ranking.jobs,
     fallback: realJobs.length === 0,
     providers: [adzuna.status, serpApi.status],
+    ranking: {
+      usedAI: ranking.usedAI,
+      model: ranking.model,
+      fallbackReason: ranking.fallbackReason,
+    },
   });
 }
