@@ -287,6 +287,17 @@ p {
   line-height: 1.35;
 }
 
+.sync-status {
+  margin-top: 10px;
+  margin-bottom: 0;
+  color: var(--accent);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
 .auth-popover {
   position: absolute;
   top: 50px;
@@ -411,6 +422,42 @@ p {
 
 .hidden-panel {
   display: none;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.clear-profile-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.86);
+  color: var(--muted-foreground);
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    transform 180ms ease-out,
+    background 180ms ease-out,
+    border-color 180ms ease-out,
+    color 180ms ease-out,
+    box-shadow 180ms ease-out;
+}
+
+.clear-profile-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(220, 38, 38, 0.34);
+  background: rgba(220, 38, 38, 0.07);
+  color: var(--danger);
+  box-shadow: var(--shadow-sm);
 }
 
 .small-caps {

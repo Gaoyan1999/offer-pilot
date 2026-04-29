@@ -1,7 +1,7 @@
 "use client";
 
 import type { AuthChangeEvent, AuthError, Session, User } from "@supabase/supabase-js";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { fallbackJobs } from "../lib/jobs/fallback";
 import { rankJobs } from "../lib/jobs/ranking";
@@ -59,6 +59,7 @@ type ProviderSearchStatus = {
 };
 
 type AuthStatus = "checking" | "ready" | "working";
+type PersistenceStatus = "signed-out" | "loading" | "saving" | "saved" | "error";
 
 type AgentApiResponse = {
   reply?: string;
@@ -78,6 +79,14 @@ type JobSearchResponse = {
 type ImportedJobsResponse = {
   jobs: RankedJob[];
   count: number;
+};
+
+type StoredWorkspace = {
+  candidate_profile: unknown;
+  ranked_jobs: unknown;
+  selected_job_id: unknown;
+  tailored_resume: unknown;
+  search_status: unknown;
 };
 
 const seedMessages: ChatMessage[] = [
@@ -107,6 +116,71 @@ function getInitialProfile(): CandidateProfile {
     educationFacts: [],
     uploadNote: "",
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function readWorkMode(value: unknown): WorkMode {
+  return value === "remote" || value === "hybrid" || value === "onsite" ? value : "";
+}
+
+function normalizeStoredProfile(value: unknown): CandidateProfile {
+  if (!isRecord(value)) return getInitialProfile();
+
+  return {
+    rawText: readString(value.rawText),
+    name: readString(value.name),
+    email: readString(value.email),
+    phone: readString(value.phone),
+    targetRole: readString(value.targetRole),
+    targetLocation: readString(value.targetLocation),
+    workMode: readWorkMode(value.workMode),
+    yearsExperience: readString(value.yearsExperience),
+    authorization: readString(value.authorization),
+    skills: readStringArray(value.skills),
+    experienceFacts: readStringArray(value.experienceFacts),
+    projectFacts: readStringArray(value.projectFacts),
+    educationFacts: readStringArray(value.educationFacts),
+    uploadNote: readString(value.uploadNote),
+  };
+}
+
+function normalizeStoredResume(value: unknown): TailoredResume | null {
+  if (!isRecord(value)) return null;
+
+  return {
+    summary: readString(value.summary),
+    skills: readStringArray(value.skills),
+    experience: readStringArray(value.experience),
+    projects: readStringArray(value.projects),
+    education: readStringArray(value.education),
+    applicationSummary: readString(value.applicationSummary),
+    gaps: readStringArray(value.gaps),
+  };
+}
+
+function normalizeStoredJobs(value: unknown) {
+  return Array.isArray(value) ? (value.filter(isRecord) as RankedJob[]) : [];
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (!isRecord(error)) return fallback;
+
+  return [error.message, error.details, error.hint]
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .join(" ")
+    .trim() || fallback;
 }
 
 function extractName(text: string) {
@@ -465,11 +539,39 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [authMenuOpen, setAuthMenuOpen] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [loadedWorkspaceUserId, setLoadedWorkspaceUserId] = useState("");
+  const [persistenceStatus, setPersistenceStatus] = useState<PersistenceStatus>("signed-out");
+  const saveSequenceRef = useRef(0);
 
   const missingInfo = useMemo(() => getMissingInfo(profile), [profile]);
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
   const userAvatar = getUserAvatar(authUser);
   const userName = getUserName(authUser);
+  const hasCandidateProfile = Boolean(
+    profile.rawText ||
+      profile.uploadNote ||
+      profile.name ||
+      profile.email ||
+      profile.phone ||
+      profile.targetRole ||
+      profile.targetLocation ||
+      profile.workMode ||
+      profile.yearsExperience ||
+      profile.authorization ||
+      profile.skills.length > 0 ||
+      profile.experienceFacts.length > 0 ||
+      profile.projectFacts.length > 0 ||
+      profile.educationFacts.length > 0,
+  );
+  const persistenceLabel = authUser
+    ? persistenceStatus === "loading"
+      ? "Loading saved workspace"
+      : persistenceStatus === "saving"
+        ? "Saving workspace"
+        : persistenceStatus === "error"
+          ? "Workspace sync failed"
+          : "Workspace saved"
+    : "Log in to sync workspace";
 
   useEffect(() => {
     let isMounted = true;
@@ -506,6 +608,100 @@ export default function Home() {
       };
     }
   }, []);
+
+  useEffect(() => {
+    const userId = authUser?.id ?? "";
+    if (!userId) {
+      setLoadedWorkspaceUserId("");
+      setPersistenceStatus("signed-out");
+      return;
+    }
+
+    let isMounted = true;
+    setPersistenceStatus("loading");
+
+    async function loadWorkspace() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data, error } = await supabase
+          .from("user_workspaces")
+          .select("candidate_profile, ranked_jobs, selected_job_id, tailored_resume, search_status")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (!isMounted) return;
+        if (error) throw error;
+
+        const workspace = data as StoredWorkspace | null;
+        if (workspace) {
+          const restoredProfile = normalizeStoredProfile(workspace.candidate_profile);
+          const restoredJobs = normalizeStoredJobs(workspace.ranked_jobs);
+          const restoredSelectedJobId = readString(workspace.selected_job_id);
+
+          setProfile(restoredProfile);
+          setJobs(restoredJobs);
+          setSelectedJobId(restoredJobs.some((job) => job.id === restoredSelectedJobId) ? restoredSelectedJobId : restoredJobs[0]?.id ?? "");
+          setResume(normalizeStoredResume(workspace.tailored_resume));
+          setSearchStatus(readString(workspace.search_status) || "Waiting for instructions");
+          setActiveTab(restoredJobs.length > 0 ? "jobs" : "cv");
+        }
+
+        setLoadedWorkspaceUserId(userId);
+        setPersistenceStatus("saved");
+      } catch (error) {
+        if (!isMounted) return;
+        setLoadedWorkspaceUserId(userId);
+        setPersistenceStatus("error");
+        setAuthError(getErrorMessage(error, "Unable to load saved workspace."));
+      }
+    }
+
+    void loadWorkspace();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authUser?.id]);
+
+  useEffect(() => {
+    const userId = authUser?.id ?? "";
+    if (!userId || loadedWorkspaceUserId !== userId) return;
+
+    const timeout = window.setTimeout(async () => {
+      const sequence = saveSequenceRef.current + 1;
+      saveSequenceRef.current = sequence;
+      setPersistenceStatus("saving");
+
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { error } = await supabase.from("user_workspaces").upsert(
+          {
+            user_id: userId,
+            candidate_profile: profile,
+            ranked_jobs: jobs,
+            selected_job_id: selectedJobId,
+            tailored_resume: resume,
+            search_status: searchStatus,
+          },
+          { onConflict: "user_id" },
+        );
+
+        if (error) throw error;
+        if (saveSequenceRef.current === sequence) {
+          setPersistenceStatus("saved");
+        }
+      } catch (error) {
+        if (saveSequenceRef.current === sequence) {
+          setPersistenceStatus("error");
+          setAuthError(getErrorMessage(error, "Unable to save workspace."));
+        }
+      }
+    }, 600);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [authUser?.id, jobs, loadedWorkspaceUserId, profile, resume, searchStatus, selectedJobId]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -770,6 +966,7 @@ export default function Home() {
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    event.target.value = "";
 
     setActiveTab("cv");
     setSearchStatus("Reading uploaded CV");
@@ -808,6 +1005,16 @@ export default function Home() {
     setProfile(nextProfile);
     setSearchStatus("CV parsed");
     addMessage("agent", "I loaded the resume text and updated your profile facts.", "status");
+  }
+
+  function handleClearCandidateProfile() {
+    setActiveTab("cv");
+    setProfile(getInitialProfile());
+    setJobs([]);
+    setSelectedJobId("");
+    setResume(null);
+    setSearchStatus("Candidate profile cleared");
+    addMessage("agent", "Cleared the saved candidate profile, CV text, job matches, and tailored resume preview.", "status");
   }
 
   async function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
@@ -961,6 +1168,7 @@ export default function Home() {
           </div>
           <span className="wordmark">OfferPilot</span>
           <p>Autonomous job search and tailored resume generation.</p>
+          <p className="sync-status">{persistenceLabel}</p>
           {authError ? <p className="auth-error">{authError}</p> : null}
         </div>
 
@@ -974,7 +1182,19 @@ export default function Home() {
         </div>
 
         <section className={activeTab === "cv" ? "sidebar-panel" : "sidebar-panel hidden-panel"}>
-          <p className="small-caps">Source Document</p>
+          <div className="panel-title-row">
+            <p className="small-caps">Source Document</p>
+            <button
+              className="clear-profile-button"
+              type="button"
+              onClick={handleClearCandidateProfile}
+              disabled={!hasCandidateProfile}
+              aria-label="Clear candidate profile"
+              title="Clear candidate profile"
+            >
+              ×
+            </button>
+          </div>
           <label className="upload-zone" htmlFor="resumeUpload">
             <span>Upload CV</span>
             <small>PDF, Markdown, or plain text</small>
