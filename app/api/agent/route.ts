@@ -138,7 +138,9 @@ export async function POST(request: NextRequest) {
     "Read the user's latest message and update the candidate profile only with facts the user provided.",
     "Infer common job-search intent when reasonable, for example 'software jobs in Sydney' means targetRole 'Software Engineer' and targetLocation 'Sydney'.",
     "Do not fabricate companies, dates, projects, education, quantified outcomes, or skills.",
-    "If important details are still missing, ask for them briefly in reply.",
+    "Decide for yourself whether the profile has enough information for the user's requested next step; do not treat currentMissingInfo as a rigid checklist.",
+    "If no resume, CV, work history, project history, or meaningful background evidence is available, briefly guide the user to upload a resume or paste resume text.",
+    "Only ask follow-up questions when the missing detail materially blocks the next step.",
     "Return JSON that exactly matches the schema.",
   ].join("\n");
 

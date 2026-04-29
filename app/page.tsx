@@ -347,11 +347,13 @@ async function readPdfText(file: File) {
 
 function getMissingInfo(profile: CandidateProfile) {
   const missing: string[] = [];
-  if (!profile.targetRole) missing.push("Target role");
-  if (!profile.targetLocation) missing.push("Target location");
-  if (!profile.workMode) missing.push("Remote / hybrid / onsite preference");
-  if (!profile.yearsExperience) missing.push("Years of experience");
-  if (profile.skills.length === 0) missing.push("Core skills");
+  const hasResumeEvidence =
+    Boolean(profile.uploadNote) ||
+    profile.experienceFacts.length > 0 ||
+    profile.projectFacts.length > 0 ||
+    profile.educationFacts.length > 0;
+
+  if (!hasResumeEvidence) missing.push("Resume");
   return missing;
 }
 
@@ -505,15 +507,6 @@ function downloadBlob(blob: Blob, fileName: string) {
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-function formatProfileSummary(profile: CandidateProfile) {
-  return [
-    profile.targetRole || "Role not set",
-    profile.targetLocation || "Location not set",
-    profile.workMode || "Work mode not set",
-    profile.yearsExperience ? `${profile.yearsExperience} years` : "Years not set",
-  ];
 }
 
 function getUserAvatar(user: User | null) {
@@ -705,9 +698,9 @@ export default function Home() {
     if (missing.length > 0) {
       setJobs([]);
       setSelectedJobId("");
-      setSearchStatus(`Needs ${missing.length} missing details`);
+      setSearchStatus("Resume needed");
       if (!options?.suppressMessage) {
-        addMessage("agent", `I need ${missing.join(", ")} before I can search and rank jobs.`, "missing-info");
+        addMessage("agent", "Upload a resume or paste resume text so I can rank jobs and tailor applications from verified facts.", "missing-info");
       }
       return;
     }
@@ -811,12 +804,6 @@ export default function Home() {
     }
   }
 
-  function handleMissingInfoSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextProfile = parseProfile("", profile);
-    evaluateProfileForSearch(nextProfile);
-  }
-
   function handleSelectJob(jobId: string) {
     const job = jobs.find((item) => item.id === jobId);
     setSelectedJobId(jobId);
@@ -869,7 +856,6 @@ export default function Home() {
     addMessage("agent", "Downloaded the fixed-template PDF resume.", "status");
   }
 
-  const profileSummary = formatProfileSummary(profile);
   const latestMissingMessage = messages.some((message) => message.kind === "missing-info") && missingInfo.length > 0;
 
   return (
@@ -936,12 +922,6 @@ export default function Home() {
           />
           <p className="panel-note">{profile.uploadNote || "No CV uploaded yet. Chat instructions can still start the profile."}</p>
 
-          <div className="profile-facts">
-            {profileSummary.map((item) => (
-              <span key={item}>{item}</span>
-            ))}
-          </div>
-
           <div className="fact-list">
             <p className="small-caps">Detected Skills</p>
             <p>{profile.skills.length > 0 ? profile.skills.slice(0, 12).join(", ") : "No skills detected yet."}</p>
@@ -990,56 +970,16 @@ export default function Home() {
           ))}
 
           {latestMissingMessage ? (
-            <form className="missing-card" onSubmit={handleMissingInfoSubmit}>
+            <section className="missing-card" aria-label="Resume needed">
               <div>
-                <p className="small-caps">Missing Information</p>
-                <h2>Complete the search profile.</h2>
+                <p className="small-caps">Resume Needed</p>
+                <h2>Upload a resume to continue.</h2>
+                <p>OfferPilot needs resume text before ranking jobs or tailoring applications from verified facts.</p>
               </div>
-              <div className="missing-grid">
-                <label>
-                  Target role
-                  <input value={profile.targetRole} onChange={(event) => updateProfile({ targetRole: event.target.value })} placeholder="Software Engineer" />
-                </label>
-                <label>
-                  Target location
-                  <input value={profile.targetLocation} onChange={(event) => updateProfile({ targetLocation: event.target.value })} placeholder="Sydney" />
-                </label>
-                <label>
-                  Years
-                  <input value={profile.yearsExperience} onChange={(event) => updateProfile({ yearsExperience: event.target.value })} placeholder="4" />
-                </label>
-                <label>
-                  Core skills
-                  <input
-                    value={profile.skills.join(", ")}
-                    onChange={(event) =>
-                      updateProfile({
-                        skills: event.target.value
-                          .split(",")
-                          .map((item) => item.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    placeholder="React, TypeScript, Node.js"
-                  />
-                </label>
-              </div>
-              <div className="work-mode-row" aria-label="Work mode">
-                {(["remote", "hybrid", "onsite"] as const).map((mode) => (
-                  <button
-                    className={profile.workMode === mode ? "chip-button active" : "chip-button"}
-                    type="button"
-                    key={mode}
-                    onClick={() => updateProfile({ workMode: mode })}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-              <button className="primary-action" type="submit">
-                Continue Search
-              </button>
-            </form>
+              <label className="primary-action upload-action" htmlFor="resumeUpload">
+                Upload CV
+              </label>
+            </section>
           ) : null}
 
           {isThinking ? (
@@ -1077,7 +1017,7 @@ export default function Home() {
         {jobs.length === 0 ? (
           <section className="empty-state">
             <p>No ranked jobs yet.</p>
-            <span>{missingInfo.length > 0 ? `Missing: ${missingInfo.join(", ")}` : "Send an instruction to start search."}</span>
+            <span>{missingInfo.length > 0 ? "Upload a resume or paste resume text to start." : "Send an instruction to start search."}</span>
           </section>
         ) : (
           <section className="job-results">
