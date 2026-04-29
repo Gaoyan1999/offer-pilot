@@ -1,253 +1,122 @@
-"use client";
+import Link from "next/link";
 
-import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
-import { FormEvent, useEffect, useState } from "react";
-import { getSupabaseBrowserClient } from "../lib/supabase/browser";
+const matches = [
+  {
+    role: "AI Product Engineer",
+    company: "Northstar Labs",
+    place: "Sydney / Remote",
+    score: "94",
+    note: "Strong overlap across product prototyping, model APIs, and customer-facing delivery.",
+  },
+  {
+    role: "Full Stack AI Engineer",
+    company: "Kauri Systems",
+    place: "Melbourne",
+    score: "88",
+    note: "Excellent technical fit with one gap around enterprise authentication ownership.",
+  },
+  {
+    role: "Product Engineer, Agents",
+    company: "Lumen Works",
+    place: "Remote APAC",
+    score: "83",
+    note: "Relevant agent workflow experience, moderate gap in evaluation infrastructure.",
+  },
+];
+
+const questions = ["Target location", "Remote preference", "Years of experience"];
 
 export default function Home() {
-  const [user, setUser] = useState<User | null>(null);
-  const [note, setNote] = useState("");
-  const [savedNote, setSavedNote] = useState("");
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("Checking session...");
-  const [isSaving, setIsSaving] = useState(false);
-  const [supabaseState] = useState(() => {
-    try {
-      return { client: getSupabaseBrowserClient(), error: "" };
-    } catch (clientError) {
-      return {
-        client: null,
-        error: clientError instanceof Error ? clientError.message : "Supabase is not configured.",
-      };
-    }
-  });
-  const supabase = supabaseState.client;
-
-  useEffect(() => {
-    if (supabaseState.error) {
-      setError(supabaseState.error);
-      setStatus("Missing configuration");
-    }
-  }, [supabaseState.error]);
-
-  useEffect(() => {
-    if (!supabase) {
-      return;
-    }
-
-    let isMounted = true;
-
-    async function loadSession() {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (!isMounted) {
-        return;
-      }
-
-      if (sessionError) {
-        setError(sessionError.message);
-        setStatus("Signed out");
-        return;
-      }
-
-      if (!session) {
-        setUser(null);
-        setError("");
-        setStatus("Signed out");
-        return;
-      }
-
-      const { data, error: userError } = await supabase.auth.getUser();
-
-      if (!isMounted) {
-        return;
-      }
-
-      if (userError) {
-        setError(userError.message);
-        setStatus("Signed out");
-        return;
-      }
-
-      setUser(data.user);
-      setError("");
-      setStatus(data.user ? "Signed in" : "Signed out");
-    }
-
-    void loadSession();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
-      setUser(session?.user ?? null);
-      setError("");
-      setStatus(session?.user ? "Signed in" : "Signed out");
-    });
-
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  useEffect(() => {
-    if (!supabase || !user) {
-      setNote("");
-      setSavedNote("");
-      return;
-    }
-
-    const currentUser = user;
-    let isMounted = true;
-
-    async function loadNote() {
-      setStatus("Loading saved text...");
-      const { data, error: loadError } = await supabase
-        .from("user_notes")
-        .select("content")
-        .eq("user_id", currentUser.id)
-        .maybeSingle();
-
-      if (!isMounted) {
-        return;
-      }
-
-      if (loadError) {
-        setError(loadError.message);
-        setStatus("Load failed");
-        return;
-      }
-
-      const content = data?.content ?? "";
-      setNote(content);
-      setSavedNote(content);
-      setError("");
-      setStatus("Ready");
-    }
-
-    void loadNote();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [supabase, user]);
-
-  async function handleGoogleLogin() {
-    if (!supabase) {
-      return;
-    }
-
-    setError("");
-    const { error: signInError } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-
-    if (signInError) {
-      setError(signInError.message);
-    }
-  }
-
-  async function handleSignOut() {
-    if (!supabase) {
-      return;
-    }
-
-    setError("");
-    const { error: signOutError } = await supabase.auth.signOut();
-
-    if (signOutError) {
-      setError(signOutError.message);
-    }
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!supabase || !user) {
-      return;
-    }
-
-    setIsSaving(true);
-    setError("");
-
-    const { error: saveError } = await supabase.from("user_notes").upsert(
-      {
-        user_id: user.id,
-        content: note,
-      },
-      { onConflict: "user_id" },
-    );
-
-    if (saveError) {
-      setError(saveError.message);
-      setStatus("Save failed");
-    } else {
-      setSavedNote(note);
-      setStatus("Saved");
-    }
-
-    setIsSaving(false);
-  }
-
-  const hasChanges = note !== savedNote;
-
   return (
-    <main className="page">
-      <section className="workspace">
-        <header className="header">
-          <div>
-            <p className="eyebrow">Supabase Auth + Database</p>
-            <h1>Google Login Save Test</h1>
-          </div>
-          <span className="status">{status}</span>
-        </header>
+    <main className="page-shell">
+      <nav className="top-nav" aria-label="Primary navigation">
+        <Link className="wordmark" href="/">
+          OfferPilot
+        </Link>
+        <div className="nav-links">
+          <Link href="/jobs">Jobs</Link>
+          <Link href="/resume">Resume</Link>
+          <Link href="/profile">Profile</Link>
+        </div>
+        <Link className="nav-action" href="/jobs">
+          View Matches
+        </Link>
+      </nav>
 
-        {!user ? (
-          <section className="panel">
-            <h2>Sign in</h2>
-            <p className="summary">
-              Sign in with Google, write a short note, and save it to Supabase. After refreshing the page, the same
-              note should still be loaded.
+      <section className="hero-section">
+        <div className="section-label">
+          <span />
+          <p>Candidate Command Desk</p>
+          <span />
+        </div>
+        <h1>Shape the search before the market sees you.</h1>
+        <p className="hero-copy">
+          A quiet workspace for turning a resume, a target role, and a few constraints into considered job matches and
+          a tailored application draft.
+        </p>
+        <div className="hero-actions">
+          <Link className="button button-primary" href="/profile">
+            Start Profile
+          </Link>
+          <Link className="button button-secondary" href="/resume">
+            Preview Resume
+          </Link>
+        </div>
+      </section>
+
+      <section className="workspace-grid" aria-label="OfferPilot workspace preview">
+        <article className="input-panel">
+          <p className="small-caps">Free Input</p>
+          <h2>Tell OfferPilot what kind of work should find you.</h2>
+          <div className="paper-field">
+            <p>
+              I am targeting AI product engineer roles in Sydney or remote APAC. I have shipped full-stack tools,
+              evaluated model outputs, and led customer pilots from prototype to production.
             </p>
-            <button type="button" onClick={handleGoogleLogin} disabled={!supabase}>
-              Sign in with Google
-            </button>
-          </section>
-        ) : (
-          <section className="panel">
-            <div className="accountRow">
-              <div>
-                <span className="label">Current user</span>
-                <p className="account">{user.email ?? user.id}</p>
+          </div>
+          <div className="upload-strip">
+            <span>PDF Resume</span>
+            <span>Markdown</span>
+            <span>Plain Text</span>
+          </div>
+        </article>
+
+        <aside className="question-panel">
+          <p className="small-caps">Follow-Up</p>
+          <h3>Three details refine the first pass.</h3>
+          <div className="question-list">
+            {questions.map((question) => (
+              <div className="question-row" key={question}>
+                <span />
+                <p>{question}</p>
               </div>
-              <button type="button" className="secondaryButton" onClick={handleSignOut}>
-                Sign out
-              </button>
-            </div>
+            ))}
+          </div>
+        </aside>
+      </section>
 
-            <form className="noteForm" onSubmit={handleSubmit}>
-              <label htmlFor="note">Test note</label>
-              <textarea
-                id="note"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                rows={8}
-                placeholder="Type anything here, save it, then refresh. The saved text should still appear."
-              />
-              <button type="submit" disabled={isSaving || !hasChanges}>
-                {isSaving ? "Saving..." : hasChanges ? "Save" : "Saved"}
-              </button>
-            </form>
-          </section>
-        )}
-
-        {error ? <p className="error">{error}</p> : null}
+      <section className="section-block">
+        <div className="section-label">
+          <span />
+          <p>Top Matches</p>
+          <span />
+        </div>
+        <div className="match-list">
+          {matches.map((match) => (
+            <article className="match-card" key={`${match.company}-${match.role}`}>
+              <div>
+                <p className="small-caps">{match.company}</p>
+                <h3>{match.role}</h3>
+                <p>{match.place}</p>
+              </div>
+              <p className="match-note">{match.note}</p>
+              <div className="score-lockup">
+                <span>{match.score}</span>
+                <small>Match</small>
+              </div>
+            </article>
+          ))}
+        </div>
       </section>
     </main>
   );
