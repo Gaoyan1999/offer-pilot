@@ -1,9 +1,18 @@
 "use client";
 
-import Link from "next/link";
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 
 type WorkMode = "remote" | "hybrid" | "onsite" | "";
+type ActiveTab = "cv" | "jobs";
+type MessageRole = "agent" | "user";
+type MessageKind = "text" | "missing-info" | "status";
+
+type ChatMessage = {
+  id: string;
+  role: MessageRole;
+  kind: MessageKind;
+  content: string;
+};
 
 type CandidateProfile = {
   rawText: string;
@@ -152,8 +161,15 @@ const mockJobs: Job[] = [
   },
 ];
 
-const seedInput =
-  "I am a product-minded full-stack engineer with React, Next.js, TypeScript, Node.js, SQL and OpenAI experience. I have 4 years of experience building SaaS products and AI workflow tools. I want AI product engineer roles in Sydney or remote.";
+const seedMessages: ChatMessage[] = [
+  {
+    id: "welcome",
+    role: "agent",
+    kind: "text",
+    content:
+      "Tell me what kind of role you want, upload a CV, or ask me to search. I will collect missing details before ranking jobs.",
+  },
+];
 
 function unique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
@@ -199,17 +215,33 @@ function extractRole(text: string) {
   const lower = text.toLowerCase();
   if (lower.includes("ai product")) return "AI Product Engineer";
   if (lower.includes("full-stack") || lower.includes("full stack")) return "Full Stack Engineer";
-  if (lower.includes("frontend") || lower.includes("front-end")) return "Frontend Engineer";
-  if (lower.includes("backend") || lower.includes("back-end")) return "Backend Engineer";
+  if (lower.includes("frontend") || lower.includes("front-end") || lower.includes("前端")) return "Frontend Engineer";
+  if (lower.includes("backend") || lower.includes("back-end") || lower.includes("后端")) return "Backend Engineer";
+  if (lower.includes("software") || lower.includes("软件")) return "Software Engineer";
   if (lower.includes("product engineer")) return "Product Engineer";
   if (lower.includes("data")) return "Data Engineer";
   return "";
 }
 
 function extractLocation(text: string) {
-  const locations = ["Sydney", "Melbourne", "Brisbane", "Perth", "Australia", "Singapore", "London", "New York"];
-  const found = locations.filter((location) => includesWord(text, location));
-  if (found.length > 0) return found.join(" / ");
+  const locationMap: Record<string, string> = {
+    Sydney: "Sydney",
+    悉尼: "Sydney",
+    Melbourne: "Melbourne",
+    墨尔本: "Melbourne",
+    Brisbane: "Brisbane",
+    Perth: "Perth",
+    Australia: "Australia",
+    澳洲: "Australia",
+    Singapore: "Singapore",
+    London: "London",
+    "New York": "New York",
+  };
+  const found = Object.entries(locationMap)
+    .filter(([raw]) => includesWord(text, raw))
+    .map(([, normalized]) => normalized);
+
+  if (found.length > 0) return unique(found).join(" / ");
 
   const match = text.match(/\b(?:in|near|around)\s+([A-Z][A-Za-z\s]{2,30})(?:\.|,|\n|$)/);
   return match?.[1]?.trim() ?? "";
@@ -217,9 +249,9 @@ function extractLocation(text: string) {
 
 function extractWorkMode(text: string): WorkMode {
   const lower = text.toLowerCase();
-  if (lower.includes("remote")) return "remote";
-  if (lower.includes("hybrid")) return "hybrid";
-  if (lower.includes("onsite") || lower.includes("on-site") || lower.includes("office")) return "onsite";
+  if (lower.includes("remote") || lower.includes("远程")) return "remote";
+  if (lower.includes("hybrid") || lower.includes("混合")) return "hybrid";
+  if (lower.includes("onsite") || lower.includes("on-site") || lower.includes("office") || lower.includes("办公室")) return "onsite";
   return "";
 }
 
@@ -291,7 +323,7 @@ async function readPdfText(file: File) {
     const page = await document.getPage(pageNumber);
     const content = await page.getTextContent();
     const pageText = content.items
-      .map((item) => ("str" in item ? item.str : ""))
+      .map((item: { str?: string }) => item.str ?? "")
       .filter(Boolean)
       .join(" ");
     pages.push(pageText);
@@ -462,28 +494,77 @@ function downloadBlob(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
+function formatProfileSummary(profile: CandidateProfile) {
+  return [
+    profile.targetRole || "Role not set",
+    profile.targetLocation || "Location not set",
+    profile.workMode || "Work mode not set",
+    profile.yearsExperience ? `${profile.yearsExperience} years` : "Years not set",
+  ];
+}
+
 export default function Home() {
-  const [freeText, setFreeText] = useState(seedInput);
+  const [activeTab, setActiveTab] = useState<ActiveTab>("cv");
+  const [chatInput, setChatInput] = useState("");
   const [profile, setProfile] = useState<CandidateProfile>(getInitialProfile);
   const [jobs, setJobs] = useState<RankedJob[]>([]);
   const [selectedJobId, setSelectedJobId] = useState("");
   const [resume, setResume] = useState<TailoredResume | null>(null);
-  const [trace, setTrace] = useState<string[]>(["Ready. Add resume/background details and start the agent."]);
+  const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
+  const [searchStatus, setSearchStatus] = useState("Waiting for instructions");
 
   const missingInfo = useMemo(() => getMissingInfo(profile), [profile]);
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
 
-  function pushTrace(message: string) {
-    setTrace((current) => [message, ...current].slice(0, 8));
+  function addMessage(role: MessageRole, content: string, kind: MessageKind = "text") {
+    setMessages((current) => [
+      ...current,
+      {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        role,
+        kind,
+        content,
+      },
+    ]);
   }
 
   function updateProfile(next: Partial<CandidateProfile>) {
     setProfile((current) => ({ ...current, ...next }));
   }
 
+  function completeSearch(nextProfile: CandidateProfile) {
+    const ranked = rankJobs(nextProfile);
+    setJobs(ranked);
+    setSelectedJobId(ranked[0]?.id ?? "");
+    setResume(null);
+    setActiveTab("jobs");
+    setSearchStatus(`Ranked ${ranked.length} jobs with fallback dataset`);
+    addMessage("agent", `I found and ranked ${ranked.length} roles. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+  }
+
+  function evaluateProfileForSearch(nextProfile: CandidateProfile) {
+    const missing = getMissingInfo(nextProfile);
+    setProfile(nextProfile);
+    setResume(null);
+
+    if (missing.length > 0) {
+      setJobs([]);
+      setSelectedJobId("");
+      setSearchStatus(`Needs ${missing.length} missing details`);
+      addMessage("agent", `I need ${missing.join(", ")} before I can search and rank jobs.`, "missing-info");
+      return;
+    }
+
+    completeSearch(nextProfile);
+  }
+
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    setActiveTab("cv");
+    setSearchStatus("Reading uploaded CV");
+    addMessage("agent", `Reading ${file.name} and extracting profile facts.`, "status");
 
     if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
       try {
@@ -491,76 +572,67 @@ export default function Home() {
         if (!content) {
           throw new Error("No readable text found in the PDF.");
         }
-        setFreeText((current) => `${current.trim()}\n\n${content}`.trim());
-        updateProfile({
+        const nextProfile = parseProfile(content, {
+          ...profile,
           uploadNote: `${file.name} parsed as PDF resume text.`,
         });
-        pushTrace(`Extracted resume text from ${file.name}.`);
+        nextProfile.uploadNote = `${file.name} parsed as PDF resume text.`;
+        setProfile(nextProfile);
+        setSearchStatus("CV parsed");
+        addMessage("agent", "I extracted the CV text. I can now use it as verified evidence for matching and resume tailoring.", "status");
       } catch (error) {
         updateProfile({
           uploadNote: `${file.name} uploaded, but text extraction failed. Paste resume text to continue.`,
         });
-        pushTrace(error instanceof Error ? error.message : "PDF text extraction failed.");
+        setSearchStatus("CV parsing failed");
+        addMessage("agent", error instanceof Error ? error.message : "PDF text extraction failed.", "status");
       }
       return;
     }
 
     const content = await file.text();
-    setFreeText((current) => `${current.trim()}\n\n${content}`.trim());
-    updateProfile({
+    const nextProfile = parseProfile(content, {
+      ...profile,
       uploadNote: `${file.name} loaded as resume text.`,
     });
-    pushTrace(`Loaded text from ${file.name}.`);
-  }
-
-  function handleStartAgent() {
-    const nextProfile = parseProfile(freeText, profile);
+    nextProfile.uploadNote = `${file.name} loaded as resume text.`;
     setProfile(nextProfile);
-    setResume(null);
-    setSelectedJobId("");
-    const missing = getMissingInfo(nextProfile);
-
-    if (missing.length > 0) {
-      setJobs([]);
-      pushTrace(`Need follow-up info before search: ${missing.join(", ")}.`);
-      return;
-    }
-
-    const ranked = rankJobs(nextProfile);
-    setJobs(ranked);
-    setSelectedJobId(ranked[0]?.id ?? "");
-    pushTrace("No search API key configured; used fallback mock jobs and ranked by profile fit.");
+    setSearchStatus("CV parsed");
+    addMessage("agent", "I loaded the resume text and updated your profile facts.", "status");
   }
 
-  function handleSearchWithProfile() {
+  function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const prompt = chatInput.trim();
+    if (!prompt) return;
+
+    setChatInput("");
+    addMessage("user", prompt);
+    const nextProfile = parseProfile(prompt, profile);
+    evaluateProfileForSearch(nextProfile);
+  }
+
+  function handleMissingInfoSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     const nextProfile = parseProfile("", profile);
-    const missing = getMissingInfo(nextProfile);
-    setProfile(nextProfile);
-    setResume(null);
-
-    if (missing.length > 0) {
-      setJobs([]);
-      pushTrace(`Still missing: ${missing.join(", ")}.`);
-      return;
-    }
-
-    const ranked = rankJobs(nextProfile);
-    setJobs(ranked);
-    setSelectedJobId(ranked[0]?.id ?? "");
-    pushTrace("Search completed with fallback mock dataset.");
+    evaluateProfileForSearch(nextProfile);
   }
 
   function handleSelectJob(jobId: string) {
+    const job = jobs.find((item) => item.id === jobId);
     setSelectedJobId(jobId);
     setResume(null);
-    pushTrace("Selected job and opened match detail.");
+    if (job) {
+      addMessage("agent", `Selected ${job.title} at ${job.company}. I opened the match detail on the right.`, "status");
+    }
   }
 
   function handleGenerateResume() {
     if (!selectedJob) return;
     const generated = buildTailoredResume(profile, selectedJob);
     setResume(generated);
-    pushTrace("Generated fact-based tailored resume preview.");
+    setSearchStatus("Tailored resume preview ready");
+    addMessage("agent", `Generated a fact-based resume preview for ${selectedJob.title} at ${selectedJob.company}.`, "status");
   }
 
   function handleDownloadPdf() {
@@ -595,266 +667,252 @@ export default function Home() {
     ];
 
     downloadBlob(createPdfBlob(lines), `offerpilot-${selectedJob.company.toLowerCase().replace(/\W+/g, "-")}-resume.pdf`);
-    pushTrace("Downloaded fixed-template PDF resume.");
+    addMessage("agent", "Downloaded the fixed-template PDF resume.", "status");
   }
 
+  const profileSummary = formatProfileSummary(profile);
+  const latestMissingMessage = messages.some((message) => message.kind === "missing-info") && missingInfo.length > 0;
+
   return (
-    <main className="page-shell">
-      <nav className="top-nav" aria-label="Primary navigation">
-        <Link className="wordmark" href="/">
-          OfferPilot
-        </Link>
-        <div className="nav-links">
-          <Link href="#profile">Profile</Link>
-          <Link href="#jobs">Jobs</Link>
-          <Link href="#resume">Resume</Link>
+    <main className="agent-shell">
+      <aside className="sidebar" aria-label="OfferPilot workspace">
+        <div className="brand-block">
+          <span className="wordmark">OfferPilot</span>
+          <p>Autonomous job search and tailored resume generation.</p>
         </div>
-        <button className="nav-action" type="button" onClick={handleStartAgent}>
-          Start Agent
-        </button>
-      </nav>
 
-      <section className="hero-section">
-        <div className="section-label">
-          <span />
-          <p>OfferPilot MVP</p>
-          <span />
-        </div>
-        <h1>Job discovery and tailored resume generator.</h1>
-        <p className="hero-copy">
-          Upload a resume or describe your background, answer missing profile details, rank matching roles, and generate
-          a fact-based tailored resume for the selected job.
-        </p>
-        <div className="hero-actions">
-          <button className="button button-primary" type="button" onClick={handleStartAgent}>
-            Parse Profile
+        <div className="sidebar-tabs" role="tablist" aria-label="Workspace sections">
+          <button className={activeTab === "cv" ? "tab-button active" : "tab-button"} type="button" onClick={() => setActiveTab("cv")}>
+            Uploaded CV
           </button>
-          <button className="button button-secondary" type="button" onClick={handleSearchWithProfile}>
-            Search Jobs
+          <button className={activeTab === "jobs" ? "tab-button active" : "tab-button"} type="button" onClick={() => setActiveTab("jobs")}>
+            Job Search
           </button>
         </div>
-      </section>
 
-      <section className="workspace-grid">
-        <article className="input-panel">
-          <p className="small-caps">Free Input</p>
-          <h2>Tell OfferPilot what kind of work should find you.</h2>
+        <section className={activeTab === "cv" ? "sidebar-panel" : "sidebar-panel hidden-panel"}>
+          <p className="small-caps">Source Document</p>
+          <label className="upload-zone" htmlFor="resumeUpload">
+            <span>Upload CV</span>
+            <small>PDF, Markdown, or plain text</small>
+          </label>
+          <input
+            className="visually-hidden"
+            id="resumeUpload"
+            type="file"
+            accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf"
+            onChange={handleFileChange}
+          />
+          <p className="panel-note">{profile.uploadNote || "No CV uploaded yet. Chat instructions can still start the profile."}</p>
 
-          <label htmlFor="resumeUpload">Upload resume</label>
-          <input id="resumeUpload" type="file" accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf" onChange={handleFileChange} />
-          {profile.uploadNote ? <p>{profile.uploadNote}</p> : null}
-
-          <label htmlFor="freeText">Background and target</label>
-          <div className="paper-field">
-            <textarea id="freeText" value={freeText} onChange={(event) => setFreeText(event.target.value)} rows={10} />
-          </div>
-
-          <div className="upload-strip">
-            <span>PDF Resume</span>
-            <span>Markdown</span>
-            <span>Plain Text</span>
-          </div>
-        </article>
-
-        <aside className="question-panel">
-          <p className="small-caps">Follow-Up</p>
-          <h3>{missingInfo.length === 0 ? "Profile is ready for search." : "Missing details before search."}</h3>
-          <div className="question-list">
-            {(missingInfo.length > 0 ? missingInfo : ["Enough information is available to search and rank jobs."]).map((item) => (
-              <div className="question-row" key={item}>
-                <span />
-                <p>{item}</p>
-              </div>
+          <div className="profile-facts">
+            {profileSummary.map((item) => (
+              <span key={item}>{item}</span>
             ))}
           </div>
-        </aside>
-      </section>
 
-      <section className="profile-layout" id="profile">
-        <article className="profile-card accent-top">
-          <p className="small-caps">Profile Controls</p>
-          <h2>Complete the search profile.</h2>
-          <div className="question-grid">
-            <label>
-              Target role
-              <input value={profile.targetRole} onChange={(event) => updateProfile({ targetRole: event.target.value })} placeholder="AI Product Engineer" />
-            </label>
-            <label>
-              Target location
-              <input value={profile.targetLocation} onChange={(event) => updateProfile({ targetLocation: event.target.value })} placeholder="Sydney / Remote" />
-            </label>
-            <label>
-              Work mode
-              <select value={profile.workMode} onChange={(event) => updateProfile({ workMode: event.target.value as WorkMode })}>
-                <option value="">Select</option>
-                <option value="remote">Remote</option>
-                <option value="hybrid">Hybrid</option>
-                <option value="onsite">Onsite</option>
-              </select>
-            </label>
-            <label>
-              Years
-              <input value={profile.yearsExperience} onChange={(event) => updateProfile({ yearsExperience: event.target.value })} placeholder="4" />
-            </label>
-            <label>
-              Work authorization
-              <input
-                value={profile.authorization}
-                onChange={(event) => updateProfile({ authorization: event.target.value })}
-                placeholder="Citizen, PR, visa holder, sponsorship required"
-              />
-            </label>
+          <div className="fact-list">
+            <p className="small-caps">Detected Skills</p>
+            <p>{profile.skills.length > 0 ? profile.skills.slice(0, 12).join(", ") : "No skills detected yet."}</p>
           </div>
-          <div className="hero-actions">
-            <button className="button button-primary" type="button" onClick={handleSearchWithProfile}>
-              Search Jobs
-            </button>
-          </div>
-        </article>
+        </section>
 
-        <article className="profile-card">
-          <p className="small-caps">Agent Trace</p>
-          <h2>Latest execution steps.</h2>
-          <div className="document-list">
-            {trace.map((item, index) => (
-              <div key={`${item}-${index}`}>
-                <span />
-                <p>{item}</p>
+        <section className={activeTab === "jobs" ? "sidebar-panel" : "sidebar-panel hidden-panel"}>
+          <p className="small-caps">Search State</p>
+          <div className="metric-stack">
+            <div>
+              <strong>{jobs.length}</strong>
+              <span>Jobs ranked</span>
+            </div>
+            <div>
+              <strong>{selectedJob ? selectedJob.matchScore : "--"}</strong>
+              <span>Selected match</span>
+            </div>
+          </div>
+          <div className="fact-list">
+            <p className="small-caps">Current Intent</p>
+            <p>{profile.targetRole || "Any role"} in {profile.targetLocation || "any location"}</p>
+            <p>{searchStatus}</p>
+          </div>
+          <div className="fact-list">
+            <p className="small-caps">Resume</p>
+            <p>{resume ? "Tailored preview generated." : "Select a job to generate a tailored PDF resume."}</p>
+          </div>
+        </section>
+      </aside>
+
+      <section className="chat-column" aria-label="Agent chat">
+        <header className="chat-header">
+          <div>
+            <p className="small-caps">Agent Chat</p>
+            <h1>Tell OfferPilot what to do.</h1>
+          </div>
+          <div className="status-pill">{searchStatus}</div>
+        </header>
+
+        <div className="message-list" aria-live="polite">
+          {messages.map((message) => (
+            <article className={`message ${message.role} ${message.kind}`} key={message.id}>
+              <span>{message.role === "agent" ? "AI" : "You"}</span>
+              <p>{message.content}</p>
+            </article>
+          ))}
+
+          {latestMissingMessage ? (
+            <form className="missing-card" onSubmit={handleMissingInfoSubmit}>
+              <div>
+                <p className="small-caps">Missing Information</p>
+                <h2>Complete the search profile.</h2>
               </div>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <section className="section-block" id="jobs">
-        <div className="section-label">
-          <span />
-          <p>Job Matches</p>
-          <span />
+              <div className="missing-grid">
+                <label>
+                  Target role
+                  <input value={profile.targetRole} onChange={(event) => updateProfile({ targetRole: event.target.value })} placeholder="Software Engineer" />
+                </label>
+                <label>
+                  Target location
+                  <input value={profile.targetLocation} onChange={(event) => updateProfile({ targetLocation: event.target.value })} placeholder="Sydney" />
+                </label>
+                <label>
+                  Years
+                  <input value={profile.yearsExperience} onChange={(event) => updateProfile({ yearsExperience: event.target.value })} placeholder="4" />
+                </label>
+                <label>
+                  Core skills
+                  <input
+                    value={profile.skills.join(", ")}
+                    onChange={(event) =>
+                      updateProfile({
+                        skills: event.target.value
+                          .split(",")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                    placeholder="React, TypeScript, Node.js"
+                  />
+                </label>
+              </div>
+              <div className="work-mode-row" aria-label="Work mode">
+                {(["remote", "hybrid", "onsite"] as const).map((mode) => (
+                  <button
+                    className={profile.workMode === mode ? "chip-button active" : "chip-button"}
+                    type="button"
+                    key={mode}
+                    onClick={() => updateProfile({ workMode: mode })}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              <button className="primary-action" type="submit">
+                Continue Search
+              </button>
+            </form>
+          ) : null}
         </div>
+
+        <form className="composer" onSubmit={handleChatSubmit}>
+          <input
+            value={chatInput}
+            onChange={(event) => setChatInput(event.target.value)}
+            placeholder="Example: I want software jobs in Sydney"
+            aria-label="Chat with OfferPilot"
+          />
+          <button className="primary-action" type="submit">
+            Send
+          </button>
+        </form>
+      </section>
+
+      <aside className="context-panel" aria-label="Structured results">
+        <header className="context-header">
+          <p className="small-caps">Context Panel</p>
+          <h2>{resume ? "Tailored Resume" : selectedJob ? "Selected Job" : jobs.length > 0 ? "Job Matches" : "Waiting"}</h2>
+        </header>
 
         {jobs.length === 0 ? (
-          <article className="detail-card">
-            <p className="small-caps">Waiting</p>
-            <h2>No ranked jobs yet.</h2>
-            <p>Parse a profile with enough target information to see ranked job matches.</p>
-          </article>
+          <section className="empty-state">
+            <p>No ranked jobs yet.</p>
+            <span>{missingInfo.length > 0 ? `Missing: ${missingInfo.join(", ")}` : "Send an instruction to start search."}</span>
+          </section>
         ) : (
-          <div className="jobs-layout">
-            <div className="job-table" aria-label="Ranked job matches">
-              <div className="table-head">
-                <span>Role</span>
-                <span>Location</span>
-                <span>Score</span>
-                <span>Gap</span>
-              </div>
+          <section className="job-results">
+            <div className="job-list" aria-label="Ranked jobs">
               {jobs.map((job) => (
-                <button className="job-row" type="button" key={job.id} onClick={() => handleSelectJob(job.id)}>
+                <button className={selectedJob?.id === job.id ? "job-item active" : "job-item"} type="button" key={job.id} onClick={() => handleSelectJob(job.id)}>
+                  <span>{job.matchScore}</span>
                   <div>
-                    <h2>{job.title}</h2>
-                    <p>
-                      {job.company} · {job.source}
-                    </p>
+                    <strong>{job.title}</strong>
+                    <p>{job.company} - {job.location}</p>
                   </div>
-                  <p>{job.location}</p>
-                  <strong>{job.matchScore}</strong>
-                  <p>{job.gaps[0]}</p>
                 </button>
               ))}
             </div>
 
             {selectedJob ? (
-              <aside className="detail-card">
-                <p className="small-caps">Selected Role</p>
-                <h2>{selectedJob.title}</h2>
-                <p>
-                  {selectedJob.company} · {selectedJob.location} · {selectedJob.workMode}
-                </p>
-                <p>{selectedJob.description}</p>
-                <Link href={selectedJob.url} target="_blank" rel="noreferrer">
-                  Open job URL
-                </Link>
-                <div className="detail-metrics">
+              <article className="job-detail">
+                <div className="detail-heading">
                   <div>
-                    <span>{selectedJob.matchScore}</span>
-                    <small>Match</small>
+                    <p className="small-caps">Match Detail</p>
+                    <h3>{selectedJob.title}</h3>
+                    <p>{selectedJob.company} - {selectedJob.location} - {selectedJob.workMode}</p>
                   </div>
-                  <div>
-                    <span>{selectedJob.matchRationale.length}</span>
-                    <small>Reasons</small>
-                  </div>
+                  <strong>{selectedJob.matchScore}</strong>
                 </div>
-                <div className="rule-list">
+                <p>{selectedJob.description}</p>
+                <a href={selectedJob.url} target="_blank" rel="noreferrer">
+                  Open job URL
+                </a>
+                <div className="detail-list">
                   {[...selectedJob.matchRationale, ...selectedJob.gaps, ...selectedJob.risks].map((item) => (
                     <p key={item}>{item}</p>
                   ))}
                 </div>
-              </aside>
+                <div className="panel-actions">
+                  <button className="primary-action" type="button" onClick={handleGenerateResume}>
+                    Generate Resume
+                  </button>
+                  <button className="secondary-action" type="button" onClick={handleDownloadPdf} disabled={!resume}>
+                    Download PDF
+                  </button>
+                </div>
+              </article>
             ) : null}
-          </div>
+
+            {resume ? (
+              <article className="resume-preview">
+                <div className="resume-masthead">
+                  <div>
+                    <h3>{profile.name || "Candidate"}</h3>
+                    <p>{[profile.email, profile.phone, profile.targetLocation].filter(Boolean).join(" - ") || "Contact details pending"}</p>
+                  </div>
+                  <span>Fixed template</span>
+                </div>
+                <p className="resume-summary">{resume.summary}</p>
+                <div className="resume-sections">
+                  <section>
+                    <span>Skills</span>
+                    <p>{resume.skills.join(", ") || "No skills provided."}</p>
+                  </section>
+                  <section>
+                    <span>Experience</span>
+                    <p>{resume.experience.join(" ")}</p>
+                  </section>
+                  <section>
+                    <span>Projects</span>
+                    <p>{resume.projects.join(" ")}</p>
+                  </section>
+                  <section>
+                    <span>Gaps</span>
+                    <p>{(resume.gaps.length > 0 ? resume.gaps : ["No major required-skill gap detected from provided facts."]).join(" ")}</p>
+                  </section>
+                </div>
+              </article>
+            ) : null}
+          </section>
         )}
-      </section>
-
-      <section className="resume-layout" id="resume">
-        <article className="profile-card accent-top">
-          <p className="small-caps">Tailored Resume</p>
-          <h2>Generate only from verified facts.</h2>
-          <p>
-            The preview rewrites positioning, reorders matched skills, and lists missing evidence instead of inventing
-            experience.
-          </p>
-          <div className="hero-actions">
-            <button className="button button-primary" type="button" onClick={handleGenerateResume} disabled={!selectedJob}>
-              Generate Resume
-            </button>
-            <button className="button button-secondary" type="button" onClick={handleDownloadPdf} disabled={!resume || !selectedJob}>
-              Download PDF
-            </button>
-          </div>
-        </article>
-
-        <article className="resume-preview">
-          {resume ? (
-            <>
-              <div className="resume-masthead">
-                <h2>{profile.name || "Candidate"}</h2>
-                <span>{[profile.email, profile.phone, profile.targetLocation].filter(Boolean).join(" · ")}</span>
-              </div>
-              <p className="resume-summary">{resume.summary}</p>
-              <div className="resume-sections">
-                <div className="resume-section-row">
-                  <span>Skills</span>
-                  <p>{resume.skills.join(", ") || "No skills provided."}</p>
-                </div>
-                <div className="resume-section-row">
-                  <span>Experience</span>
-                  <p>{resume.experience.join(" ")}</p>
-                </div>
-                <div className="resume-section-row">
-                  <span>Projects</span>
-                  <p>{resume.projects.join(" ")}</p>
-                </div>
-                <div className="resume-section-row">
-                  <span>Gaps</span>
-                  <p>
-                    {(resume.gaps.length > 0 ? resume.gaps : ["No major required-skill gap detected from provided facts."]).join(
-                      " ",
-                    )}
-                  </p>
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="resume-masthead">
-                <h2>Resume Preview</h2>
-                <span>Fixed template</span>
-              </div>
-              <p className="resume-summary">Select a job and generate a fact-based resume preview.</p>
-            </>
-          )}
-        </article>
-      </section>
+      </aside>
     </main>
   );
 }
