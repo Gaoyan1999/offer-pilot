@@ -550,9 +550,11 @@ export default function Home() {
   const [loadedWorkspaceUserId, setLoadedWorkspaceUserId] = useState("");
   const [persistenceStatus, setPersistenceStatus] = useState<PersistenceStatus>("signed-out");
   const saveSequenceRef = useRef(0);
+  const importOnLoadRef = useRef(false);
+  const importedLoadSequenceRef = useRef(0);
 
   const missingInfo = useMemo(() => getMissingInfo(profile), [profile]);
-  const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
+  const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? null;
   const userAvatar = getUserAvatar(authUser);
   const userName = getUserName(authUser);
   const hasCandidateProfile = Boolean(
@@ -641,6 +643,12 @@ export default function Home() {
         if (error) throw error;
 
         const workspace = data as StoredWorkspace | null;
+        if (importOnLoadRef.current) {
+          setLoadedWorkspaceUserId(userId);
+          setPersistenceStatus("saved");
+          return;
+        }
+
         if (workspace) {
           const restoredProfile = normalizeStoredProfile(workspace.candidate_profile);
           const restoredJobs = normalizeStoredJobs(workspace.ranked_jobs);
@@ -648,7 +656,7 @@ export default function Home() {
 
           setProfile(restoredProfile);
           setJobs(restoredJobs);
-          setSelectedJobId(restoredJobs.some((job) => job.id === restoredSelectedJobId) ? restoredSelectedJobId : restoredJobs[0]?.id ?? "");
+          setSelectedJobId(restoredJobs.some((job) => job.id === restoredSelectedJobId) ? restoredSelectedJobId : "");
           setResume(normalizeStoredResume(workspace.tailored_resume));
           setSearchStatus(readString(workspace.search_status) || "Waiting for instructions");
           setActiveTab(restoredJobs.length > 0 ? "jobs" : "cv");
@@ -715,6 +723,7 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("importedJobs") !== "1") return;
 
+    importOnLoadRef.current = true;
     params.delete("importedJobs");
     const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
     window.history.replaceState({}, "", nextUrl);
@@ -823,6 +832,7 @@ export default function Home() {
   }
 
   async function completeSearch(nextProfile: CandidateProfile, options?: { suppressMessage?: boolean }) {
+    importedLoadSequenceRef.current += 1;
     setActiveTab("jobs");
     setSearchStatus("Searching Adzuna and Google Jobs");
     if (!options?.suppressMessage) {
@@ -848,16 +858,16 @@ export default function Home() {
       const rankingSummary = result.ranking?.usedAI ? `AI-ranked with ${result.ranking.model ?? "OpenAI"}` : "ranked with the local fallback scorer";
 
       setJobs(ranked);
-      setSelectedJobId(ranked[0]?.id ?? "");
+      setSelectedJobId("");
       setResume(null);
       setSearchStatus(`${rankingSummary}: ${ranked.length} jobs from ${sourceSummary}`);
       if (!options?.suppressMessage) {
-        addMessage("agent", `I found ${ranked.length} roles from ${sourceSummary} and ${rankingSummary}. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+        addMessage("agent", `I found ${ranked.length} roles from ${sourceSummary} and ${rankingSummary}. Select a job from the left list to inspect fit, gaps, and resume options.`, "status");
       }
     } catch (error) {
       const ranked = rankJobs(fallbackJobs, nextProfile);
       setJobs(ranked);
-      setSelectedJobId(ranked[0]?.id ?? "");
+      setSelectedJobId("");
       setResume(null);
       setSearchStatus(`Ranked ${ranked.length} jobs with fallback dataset`);
       if (!options?.suppressMessage) {
@@ -889,17 +899,22 @@ export default function Home() {
   }
 
   async function loadImportedJobs(options: { silentIfEmpty?: boolean } = {}) {
+    const sequence = importedLoadSequenceRef.current + 1;
+    importedLoadSequenceRef.current = sequence;
     setActiveTab("jobs");
     setSearchStatus("Loading browser-imported jobs");
+    const localParams = buildSearchParams(profile);
+    localParams.set("ranking", "local");
 
     try {
-      const response = await fetch(`/api/jobs/import?${buildSearchParams(profile).toString()}`);
+      const response = await fetch(`/api/jobs/import?${localParams.toString()}`);
       if (!response.ok) {
         throw new Error(`Imported job load failed with ${response.status}`);
       }
 
       const result = (await response.json()) as ImportedJobsResponse;
       if (!Array.isArray(result.jobs) || result.jobs.length === 0) {
+        if (importedLoadSequenceRef.current !== sequence) return;
         setSearchStatus("No browser-imported jobs found");
         if (!options.silentIfEmpty) {
           addMessage("agent", "No imported jobs are available yet. Use the Chrome extension on a job search page, then load imported jobs again.", "status");
@@ -907,15 +922,44 @@ export default function Home() {
         return;
       }
 
+      if (importedLoadSequenceRef.current !== sequence) return;
       setJobs(result.jobs);
-      setSelectedJobId(result.jobs[0]?.id ?? "");
+      setSelectedJobId("");
       setResume(null);
-      const rankingSummary = result.ranking?.usedAI ? `AI-ranked with ${result.ranking.model ?? "OpenAI"}` : "ranked with the local fallback scorer";
-      setSearchStatus(`${rankingSummary}: ${result.jobs.length} browser-imported jobs`);
-      addMessage("agent", `Loaded ${result.jobs.length} jobs imported from your browser and ${rankingSummary}.`, "status");
+      setSearchStatus(`Loaded ${result.jobs.length} browser-imported jobs; AI ranking is running`);
+      addMessage("agent", `Loaded ${result.jobs.length} selected jobs from your browser. I am ranking them in the background.`, "status");
+      const aiParams = buildSearchParams(profile);
+      aiParams.set("ranking", "ai");
+      void refreshImportedJobsWithAi(aiParams, sequence);
     } catch (error) {
+      if (importedLoadSequenceRef.current !== sequence) return;
       setSearchStatus("Imported job load failed");
       addMessage("agent", error instanceof Error ? error.message : "Could not load imported jobs.", "status");
+    }
+  }
+
+  async function refreshImportedJobsWithAi(params: URLSearchParams, sequence: number) {
+    try {
+      const response = await fetch(`/api/jobs/import?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`AI ranking failed with ${response.status}`);
+      }
+
+      const result = (await response.json()) as ImportedJobsResponse;
+      if (importedLoadSequenceRef.current !== sequence) return;
+      if (!Array.isArray(result.jobs) || result.jobs.length === 0) return;
+
+      setJobs(result.jobs);
+      setSelectedJobId((current) => (result.jobs.some((job) => job.id === current) ? current : ""));
+      const rankingSummary = result.ranking?.usedAI ? `AI-ranked with ${result.ranking.model ?? "OpenAI"}` : "kept the local fallback ranking";
+      setSearchStatus(`${rankingSummary}: ${result.jobs.length} browser-imported jobs`);
+      if (result.ranking?.usedAI) {
+        addMessage("agent", `Finished AI ranking for ${result.jobs.length} browser-imported jobs.`, "status");
+      }
+    } catch (error) {
+      if (importedLoadSequenceRef.current !== sequence) return;
+      setSearchStatus("Loaded browser-imported jobs; AI ranking failed");
+      addMessage("agent", error instanceof Error ? error.message : "Could not finish AI ranking.", "status");
     }
   }
 
@@ -1096,6 +1140,30 @@ export default function Home() {
     }
   }
 
+  function handleDeleteJob(jobId: string) {
+    importedLoadSequenceRef.current += 1;
+    const job = jobs.find((item) => item.id === jobId);
+    const nextJobs = jobs.filter((item) => item.id !== jobId);
+
+    setJobs(nextJobs);
+    setSelectedJobId((current) => {
+      if (current && current !== jobId && nextJobs.some((item) => item.id === current)) {
+        return current;
+      }
+
+      return "";
+    });
+
+    if (!selectedJob || selectedJob.id === jobId) {
+      setResume(null);
+    }
+
+    setSearchStatus(nextJobs.length > 0 ? `${nextJobs.length} jobs remaining` : "No ranked jobs yet");
+    if (job) {
+      addMessage("agent", `Removed ${job.title} at ${job.company} from the job list.`, "status");
+    }
+  }
+
   function handleGenerateResume() {
     if (!selectedJob) return;
     const generated = buildTailoredResume(profile, selectedJob);
@@ -1224,50 +1292,36 @@ export default function Home() {
           </div>
         </section>
 
-        <section className={activeTab === "jobs" ? "sidebar-panel" : "sidebar-panel hidden-panel"}>
-          <p className="small-caps">Search State</p>
-          <div className="metric-stack">
-            <div>
-              <strong>{jobs.length}</strong>
-              <span>Jobs ranked</span>
+        <section className={activeTab === "jobs" ? "sidebar-panel jobs-panel" : "sidebar-panel jobs-panel hidden-panel"}>
+          {jobs.length === 0 ? (
+            <section className="sidebar-empty">
+              <p>No candidates yet.</p>
+              <span>{missingInfo.length > 0 ? "Upload a resume or paste resume text to start." : "Send an instruction to start search."}</span>
+            </section>
+          ) : (
+            <div className="job-list sidebar-job-list" aria-label="Job candidates">
+              {jobs.map((job) => (
+                <article className={selectedJob?.id === job.id ? "job-item active" : "job-item"} key={job.id}>
+                  <button className="job-select" type="button" onClick={() => handleSelectJob(job.id)}>
+                    <span>{job.matchScore}</span>
+                    <div>
+                      <strong>{job.title}</strong>
+                      <p>{job.company} - {job.location} - {formatSource(job.source)}</p>
+                    </div>
+                  </button>
+                  <button className="job-delete" type="button" onClick={() => handleDeleteJob(job.id)} aria-label={`Remove ${job.title}`} title="Remove job">
+                    ×
+                  </button>
+                </article>
+              ))}
             </div>
-            <div>
-              <strong>{selectedJob ? selectedJob.matchScore : "--"}</strong>
-              <span>Selected match</span>
-            </div>
-          </div>
-          <div className="fact-list">
-            <p className="small-caps">Current Intent</p>
-            <p>{profile.targetRole || "Any role"} in {profile.targetLocation || "any location"}</p>
-            <p>{searchStatus}</p>
-          </div>
-          <div className="fact-list">
-            <p className="small-caps">Resume</p>
-            <p>{resume ? "Tailored preview generated." : "Select a job to generate a tailored PDF resume."}</p>
-          </div>
-          <div className="sidebar-actions">
-            <button className="primary-action sidebar-action" type="button" onClick={handleSearchWithExtension}>
-              Search with Extension
-            </button>
-            <button className="secondary-action sidebar-action" type="button" onClick={handleLoadImportedJobs}>
-              Load Imported Jobs
-            </button>
-          </div>
+          )}
         </section>
       </aside>
 
       <section className="chat-column" aria-label="Agent chat">
         <header className="chat-header">
-          <div>
-            <p className="small-caps">Agent Chat</p>
-            <h1>Tell OfferPilot what to do.</h1>
-          </div>
-          <div className="chat-header-actions">
-            <button className="primary-action header-action" type="button" onClick={handleSearchWithExtension}>
-              Search with Extension
-            </button>
-            <div className="status-pill">{searchStatus}</div>
-          </div>
+          <h1>Tell OfferPilot what to do.</h1>
         </header>
 
         <div className="message-list" aria-live="polite">
@@ -1348,57 +1402,43 @@ export default function Home() {
       <aside className="context-panel" aria-label="Structured results">
         <header className="context-header">
           <p className="small-caps">Context Panel</p>
-          <h2>{resume ? "Tailored Resume" : selectedJob ? "Selected Job" : jobs.length > 0 ? "Job Matches" : "Waiting"}</h2>
+          <h2>{selectedJob ? "Selected Job" : "Waiting"}</h2>
         </header>
 
-        {jobs.length === 0 ? (
+        {!selectedJob ? (
           <section className="empty-state">
-            <p>No ranked jobs yet.</p>
-            <span>{missingInfo.length > 0 ? "Upload a resume or paste resume text to start." : "Send an instruction to start search."}</span>
+            <p>{jobs.length > 0 ? "Select a candidate from the left." : "No selected job yet."}</p>
+            <span>{jobs.length > 0 ? "The job detail panel will appear here." : "Search results will appear in the Job Search tab."}</span>
           </section>
         ) : (
-          <section className="job-results">
-            <div className="job-list" aria-label="Ranked jobs">
-              {jobs.map((job) => (
-                <button className={selectedJob?.id === job.id ? "job-item active" : "job-item"} type="button" key={job.id} onClick={() => handleSelectJob(job.id)}>
-                  <span>{job.matchScore}</span>
-                  <div>
-                    <strong>{job.title}</strong>
-                    <p>{job.company} - {job.location} - {formatSource(job.source)}</p>
-                  </div>
+          <section className="selected-job-panel">
+            <article className="job-detail">
+              <div className="detail-heading">
+                <div>
+                  <p className="small-caps">Match Detail</p>
+                  <h3>{selectedJob.title}</h3>
+                  <p>{selectedJob.company} - {selectedJob.location} - {selectedJob.workMode} - {formatSource(selectedJob.source)}</p>
+                </div>
+                <strong>{selectedJob.matchScore}</strong>
+              </div>
+              <p>{selectedJob.description}</p>
+              <a href={selectedJob.url} target="_blank" rel="noreferrer">
+                Open job URL
+              </a>
+              <div className="detail-list">
+                {[...selectedJob.matchRationale, ...selectedJob.gaps, ...selectedJob.risks].map((item) => (
+                  <p key={item}>{item}</p>
+                ))}
+              </div>
+              <div className="panel-actions">
+                <button className="primary-action" type="button" onClick={handleGenerateResume}>
+                  Generate Resume
                 </button>
-              ))}
-            </div>
-
-            {selectedJob ? (
-              <article className="job-detail">
-                <div className="detail-heading">
-                  <div>
-                    <p className="small-caps">Match Detail</p>
-                    <h3>{selectedJob.title}</h3>
-                    <p>{selectedJob.company} - {selectedJob.location} - {selectedJob.workMode} - {formatSource(selectedJob.source)}</p>
-                  </div>
-                  <strong>{selectedJob.matchScore}</strong>
-                </div>
-                <p>{selectedJob.description}</p>
-                <a href={selectedJob.url} target="_blank" rel="noreferrer">
-                  Open job URL
-                </a>
-                <div className="detail-list">
-                  {[...selectedJob.matchRationale, ...selectedJob.gaps, ...selectedJob.risks].map((item) => (
-                    <p key={item}>{item}</p>
-                  ))}
-                </div>
-                <div className="panel-actions">
-                  <button className="primary-action" type="button" onClick={handleGenerateResume}>
-                    Generate Resume
-                  </button>
-                  <button className="secondary-action" type="button" onClick={handleDownloadPdf} disabled={!resume}>
-                    Download PDF
-                  </button>
-                </div>
-              </article>
-            ) : null}
+                <button className="secondary-action" type="button" onClick={handleDownloadPdf} disabled={!resume}>
+                  Download PDF
+                </button>
+              </div>
+            </article>
 
             {resume ? (
               <article className="resume-preview">

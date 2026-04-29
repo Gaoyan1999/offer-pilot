@@ -13,7 +13,7 @@ export function scoreJob(job: Job, profile: JobSearchProfile): RankedJob {
         : 0;
   const skillScore = matchedSkills.length * 10 + niceMatches.length * 4;
   const experienceScore = profile.yearsExperience ? 8 : 0;
-  const matchScore = Math.min(98, 35 + roleMatch + locationMatch + skillScore + experienceScore);
+  const matchScore = Math.min(98, 65 + roleMatch + locationMatch + skillScore + experienceScore);
   const missingRequired = job.requiredSkills.filter((skill) => !matchedSkills.includes(skill));
 
   return {
