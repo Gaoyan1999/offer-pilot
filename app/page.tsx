@@ -12,12 +12,16 @@ import { getSupabaseBrowserClient } from "../lib/supabase/browser";
 type ActiveTab = "cv" | "jobs";
 type MessageRole = "agent" | "user";
 type MessageKind = "text" | "missing-info" | "status";
+type MessageAction = "extension-search";
+type MessageActionStatus = "pending" | "accepted" | "dismissed";
 
 type ChatMessage = {
   id: string;
   role: MessageRole;
   kind: MessageKind;
   content: string;
+  action?: MessageAction;
+  actionStatus?: MessageActionStatus;
 };
 
 type CandidateProfile = {
@@ -436,6 +440,17 @@ function buildSearchParams(profile: CandidateProfile) {
   });
 }
 
+function hasJobSearchIntent(input: string) {
+  const normalized = input.toLowerCase();
+  const explicitChineseIntent = /找工作|找岗位|找职位|搜工作|搜索工作|求职|投简历|看招聘/.test(input);
+  const explicitEnglishIntent =
+    /\b(?:find|search|look for|hunt for|apply to|browse|discover)\b/.test(normalized) &&
+    /\b(?:job|jobs|role|roles|position|positions|opening|openings|vacancy|vacancies)\b/.test(normalized);
+  const roleRequest = /\b(?:i want|i need|looking for|interested in)\b/.test(normalized) && /\b(?:jobs|roles|positions)\b/.test(normalized);
+
+  return explicitChineseIntent || explicitEnglishIntent || roleRequest;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("cv");
   const [chatInput, setChatInput] = useState("");
@@ -503,7 +518,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function addMessage(role: MessageRole, content: string, kind: MessageKind = "text") {
+  function addMessage(role: MessageRole, content: string, kind: MessageKind = "text", action?: MessageAction) {
     setMessages((current) => [
       ...current,
       {
@@ -511,8 +526,47 @@ export default function Home() {
         role,
         kind,
         content,
+        action,
+        actionStatus: action ? "pending" : undefined,
       },
     ]);
+  }
+
+  function addExtensionSearchPrompt() {
+    setMessages((current) => {
+      if (current.some((message) => message.action === "extension-search" && message.actionStatus === "pending")) {
+        return current;
+      }
+
+      return [
+        ...current,
+        {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          role: "agent",
+          kind: "status",
+          content: "I can use the Chrome extension to search LinkedIn from your current intent. Do you want me to start Search with Extension?",
+          action: "extension-search",
+          actionStatus: "pending",
+        },
+      ];
+    });
+  }
+
+  function handleExtensionPromptResponse(messageId: string, accepted: boolean) {
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              actionStatus: accepted ? "accepted" : "dismissed",
+            }
+          : message,
+      ),
+    );
+
+    if (accepted) {
+      handleSearchWithExtension();
+    }
   }
 
   function updateProfile(next: Partial<CandidateProfile>) {
@@ -760,6 +814,7 @@ export default function Home() {
     event.preventDefault();
     const prompt = chatInput.trim();
     if (!prompt) return;
+    const shouldOfferExtensionSearch = hasJobSearchIntent(prompt);
 
     setChatInput("");
     addMessage("user", prompt);
@@ -794,6 +849,9 @@ export default function Home() {
 
       addMessage("agent", reply, missing.length > 0 ? "missing-info" : "status");
       await evaluateProfileForSearch(nextProfile, { suppressMessage: true });
+      if (shouldOfferExtensionSearch) {
+        addExtensionSearchPrompt();
+      }
     } catch (error) {
       const nextProfile = locallyParsedProfile;
       addMessage(
@@ -804,6 +862,9 @@ export default function Home() {
         "status",
       );
       await evaluateProfileForSearch(nextProfile);
+      if (shouldOfferExtensionSearch) {
+        addExtensionSearchPrompt();
+      }
     } finally {
       setIsThinking(false);
     }
@@ -981,9 +1042,37 @@ export default function Home() {
 
         <div className="message-list" aria-live="polite">
           {messages.map((message) => (
-            <article className={`message ${message.role} ${message.kind}`} key={message.id}>
+            <article className={`message ${message.role} ${message.kind} ${message.action ? "action-message" : ""}`} key={message.id}>
               <span>{message.role === "agent" ? "AI" : "You"}</span>
               <p>{message.content}</p>
+              {message.action === "extension-search" ? (
+                <div className="message-actions" aria-label="Search with Extension confirmation">
+                  {message.actionStatus === "pending" ? (
+                    <>
+                      <button
+                        className="icon-action accept"
+                        type="button"
+                        onClick={() => handleExtensionPromptResponse(message.id, true)}
+                        aria-label="Start Search with Extension"
+                        title="Start Search with Extension"
+                      >
+                        ✓
+                      </button>
+                      <button
+                        className="icon-action dismiss"
+                        type="button"
+                        onClick={() => handleExtensionPromptResponse(message.id, false)}
+                        aria-label="Dismiss extension search"
+                        title="Dismiss"
+                      >
+                        ×
+                      </button>
+                    </>
+                  ) : (
+                    <p className="action-result">{message.actionStatus === "accepted" ? "Extension search requested." : "Extension search skipped."}</p>
+                  )}
+                </div>
+              ) : null}
             </article>
           ))}
 
