@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { addImportedJobs, clearImportedJobs, getImportedJobs, ImportedJobInput } from "../../../../lib/jobs/import-store";
 import { rankJobsWithAgent } from "../../../../lib/jobs/ai-ranking";
+import { rankJobs } from "../../../../lib/jobs/ranking";
 import { JobSearchProfile, WorkMode } from "../../../../lib/jobs/types";
 
 export const runtime = "nodejs";
@@ -37,7 +38,16 @@ export async function OPTIONS() {
 
 export async function GET(request: NextRequest) {
   const profile = parseProfile(request);
-  const ranking = await rankJobsWithAgent(getImportedJobs(), profile);
+  const rankingMode = request.nextUrl.searchParams.get("ranking");
+  const importedJobs = getImportedJobs();
+  const ranking =
+    rankingMode === "local"
+      ? {
+          jobs: rankJobs(importedJobs, profile),
+          usedAI: false,
+          fallbackReason: "Loaded immediately with the local scorer.",
+        }
+      : await rankJobsWithAgent(importedJobs, profile);
 
   return NextResponse.json(
     {
