@@ -1,6 +1,8 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useMemo, useState } from "react";
+import type { AuthChangeEvent, AuthError, Session, User } from "@supabase/supabase-js";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { getSupabaseBrowserClient } from "../lib/supabase/browser";
 
 type WorkMode = "remote" | "hybrid" | "onsite" | "";
 type ActiveTab = "cv" | "jobs";
@@ -60,6 +62,8 @@ type TailoredResume = {
   applicationSummary: string;
   gaps: string[];
 };
+
+type AuthStatus = "checking" | "ready" | "working";
 
 const knownSkills = [
   "React",
@@ -503,6 +507,22 @@ function formatProfileSummary(profile: CandidateProfile) {
   ];
 }
 
+function getUserAvatar(user: User | null) {
+  const metadata = user?.user_metadata;
+  const avatar = metadata?.avatar_url ?? metadata?.picture;
+  return typeof avatar === "string" ? avatar : "";
+}
+
+function getUserName(user: User | null) {
+  const metadata = user?.user_metadata;
+  const name = metadata?.full_name ?? metadata?.name ?? user?.email;
+  return typeof name === "string" ? name : "Signed in user";
+}
+
+function getUserInitial(user: User | null) {
+  return getUserName(user).trim().charAt(0).toUpperCase() || "U";
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("cv");
   const [chatInput, setChatInput] = useState("");
@@ -512,9 +532,51 @@ export default function Home() {
   const [resume, setResume] = useState<TailoredResume | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
   const [searchStatus, setSearchStatus] = useState("Waiting for instructions");
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
+  const [authError, setAuthError] = useState("");
+  const [authMenuOpen, setAuthMenuOpen] = useState(false);
 
   const missingInfo = useMemo(() => getMissingInfo(profile), [profile]);
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
+  const userAvatar = getUserAvatar(authUser);
+  const userName = getUserName(authUser);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+
+      supabase.auth.getSession().then(({ data, error }: { data: { session: Session | null }; error: AuthError | null }) => {
+        if (!isMounted) return;
+        if (error) {
+          setAuthError(error.message);
+        }
+        setAuthUser(data.session?.user ?? null);
+        setAuthStatus("ready");
+      });
+
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
+        setAuthUser(session?.user ?? null);
+        setAuthStatus("ready");
+        setAuthMenuOpen(false);
+      });
+
+      return () => {
+        isMounted = false;
+        subscription.unsubscribe();
+      };
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to initialize authentication.");
+      setAuthStatus("ready");
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, []);
 
   function addMessage(role: MessageRole, content: string, kind: MessageKind = "text") {
     setMessages((current) => [
@@ -530,6 +592,51 @@ export default function Home() {
 
   function updateProfile(next: Partial<CandidateProfile>) {
     setProfile((current) => ({ ...current, ...next }));
+  }
+
+  async function handleGoogleSignIn() {
+    setAuthError("");
+    setAuthMenuOpen(false);
+    setAuthStatus("working");
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+
+      if (error) {
+        setAuthError(error.message);
+        setAuthStatus("ready");
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to start Google sign in.");
+      setAuthStatus("ready");
+    }
+  }
+
+  async function handleSignOut() {
+    setAuthError("");
+    setAuthMenuOpen(false);
+    setAuthStatus("working");
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        setAuthError(error.message);
+      } else {
+        setAuthUser(null);
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to sign out.");
+    } finally {
+      setAuthStatus("ready");
+    }
   }
 
   function completeSearch(nextProfile: CandidateProfile) {
@@ -677,8 +784,40 @@ export default function Home() {
     <main className="agent-shell">
       <aside className="sidebar" aria-label="OfferPilot workspace">
         <div className="brand-block">
+          <div className="auth-control">
+            {authUser ? (
+              <>
+                <button
+                  className="avatar-button"
+                  type="button"
+                  onClick={() => setAuthMenuOpen((current) => !current)}
+                  title={userName}
+                  aria-label={`${userName} account menu`}
+                  aria-expanded={authMenuOpen}
+                >
+                  {userAvatar ? <img src={userAvatar} alt="" referrerPolicy="no-referrer" /> : <span>{getUserInitial(authUser)}</span>}
+                </button>
+                {authMenuOpen ? (
+                  <div className="auth-popover" role="menu">
+                    <div>
+                      <strong>{userName}</strong>
+                      {authUser.email ? <span>{authUser.email}</span> : null}
+                    </div>
+                    <button type="button" onClick={handleSignOut} role="menuitem">
+                      Log out
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <button className="google-login-button" type="button" onClick={handleGoogleSignIn} disabled={authStatus !== "ready"}>
+                {authStatus === "checking" ? "Checking" : authStatus === "working" ? "Opening" : "Log in"}
+              </button>
+            )}
+          </div>
           <span className="wordmark">OfferPilot</span>
           <p>Autonomous job search and tailored resume generation.</p>
+          {authError ? <p className="auth-error">{authError}</p> : null}
         </div>
 
         <div className="sidebar-tabs" role="tablist" aria-label="Workspace sections">
