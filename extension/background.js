@@ -31,11 +31,32 @@ async function getEndpoint() {
   return result.endpoint || defaultEndpoint;
 }
 
+async function updateLinkedInLoading(tabId, message) {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      action: "showOfferPilotLoading",
+      message,
+    });
+  } catch {
+    // The content script may still be attaching immediately after navigation.
+  }
+}
+
+async function hideLinkedInLoading(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: "hideOfferPilotLoading" });
+  } catch {
+    // If the tab navigated away, there is no mask left for this page context.
+  }
+}
+
 async function extractJobsFromTab(tabId) {
+  await updateLinkedInLoading(tabId, "Scanning LinkedIn results...");
   await chrome.scripting.executeScript({
     target: { tabId },
     func: () => window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }),
   });
+  await updateLinkedInLoading(tabId, "Collecting visible job cards...");
   await sleep(1400);
 
   return chrome.tabs.sendMessage(tabId, { action: "extractVisibleJobs" });
@@ -93,6 +114,7 @@ async function startExtensionSearch(payload) {
   if (tab.id) {
     await waitForTabLoad(tab.id);
     await chrome.storage.local.set({ previewStatus: "Reading LinkedIn search results..." });
+    await updateLinkedInLoading(tab.id, "Reading LinkedIn search results...");
     await sleep(2200);
 
     try {
@@ -102,6 +124,7 @@ async function startExtensionSearch(payload) {
         previewJobs: jobs,
         previewStatus: jobs.length > 0 ? "Review LinkedIn jobs while comparing the page on the left." : "No LinkedIn jobs found on this page.",
       });
+      await hideLinkedInLoading(tab.id);
       await chrome.tabs.sendMessage(tab.id, {
         action: "showOfferPilotPanel",
         jobs,
@@ -112,6 +135,7 @@ async function startExtensionSearch(payload) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "LinkedIn extraction failed.";
       await chrome.storage.local.set({ previewStatus: message });
+      await hideLinkedInLoading(tab.id);
       await chrome.tabs.sendMessage(tab.id, {
         action: "showOfferPilotPanel",
         jobs: [],
