@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { addImportedJobs, clearImportedJobs, getImportedJobs, ImportedJobInput } from "../../../../lib/jobs/import-store";
-import { rankJobs } from "../../../../lib/jobs/ranking";
+import { rankJobsWithAgent } from "../../../../lib/jobs/ai-ranking";
 import { JobSearchProfile, WorkMode } from "../../../../lib/jobs/types";
 
 export const runtime = "nodejs";
@@ -37,12 +37,17 @@ export async function OPTIONS() {
 
 export async function GET(request: NextRequest) {
   const profile = parseProfile(request);
-  const jobs = rankJobs(getImportedJobs(), profile);
+  const ranking = await rankJobsWithAgent(getImportedJobs(), profile);
 
   return NextResponse.json(
     {
-      jobs,
-      count: jobs.length,
+      jobs: ranking.jobs,
+      count: ranking.jobs.length,
+      ranking: {
+        usedAI: ranking.usedAI,
+        model: ranking.model,
+        fallbackReason: ranking.fallbackReason,
+      },
     },
     {
       headers: corsHeaders,

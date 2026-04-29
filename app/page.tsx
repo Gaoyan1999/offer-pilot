@@ -74,11 +74,19 @@ type JobSearchResponse = {
   jobs: RankedJob[];
   fallback: boolean;
   providers: ProviderSearchStatus[];
+  ranking?: RankingMeta;
 };
 
 type ImportedJobsResponse = {
   jobs: RankedJob[];
   count: number;
+  ranking?: RankingMeta;
+};
+
+type RankingMeta = {
+  usedAI: boolean;
+  model?: string;
+  fallbackReason?: string;
 };
 
 type StoredWorkspace = {
@@ -837,13 +845,14 @@ export default function Home() {
       const sourceSummary = result.fallback
         ? "fallback dataset"
         : activeProviders.map((provider) => `${formatSource(provider.source)} (${provider.count})`).join(" and ") || "real job sources";
+      const rankingSummary = result.ranking?.usedAI ? `AI-ranked with ${result.ranking.model ?? "OpenAI"}` : "ranked with the local fallback scorer";
 
       setJobs(ranked);
       setSelectedJobId(ranked[0]?.id ?? "");
       setResume(null);
-      setSearchStatus(`Ranked ${ranked.length} jobs from ${sourceSummary}`);
+      setSearchStatus(`${rankingSummary}: ${ranked.length} jobs from ${sourceSummary}`);
       if (!options?.suppressMessage) {
-        addMessage("agent", `I found and ranked ${ranked.length} roles from ${sourceSummary}. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
+        addMessage("agent", `I found ${ranked.length} roles from ${sourceSummary} and ${rankingSummary}. Select a job on the right to inspect fit, gaps, and resume options.`, "status");
       }
     } catch (error) {
       const ranked = rankJobs(fallbackJobs, nextProfile);
@@ -901,8 +910,9 @@ export default function Home() {
       setJobs(result.jobs);
       setSelectedJobId(result.jobs[0]?.id ?? "");
       setResume(null);
-      setSearchStatus(`Ranked ${result.jobs.length} browser-imported jobs`);
-      addMessage("agent", `Loaded and ranked ${result.jobs.length} jobs imported from your browser.`, "status");
+      const rankingSummary = result.ranking?.usedAI ? `AI-ranked with ${result.ranking.model ?? "OpenAI"}` : "ranked with the local fallback scorer";
+      setSearchStatus(`${rankingSummary}: ${result.jobs.length} browser-imported jobs`);
+      addMessage("agent", `Loaded ${result.jobs.length} jobs imported from your browser and ${rankingSummary}.`, "status");
     } catch (error) {
       setSearchStatus("Imported job load failed");
       addMessage("agent", error instanceof Error ? error.message : "Could not load imported jobs.", "status");
