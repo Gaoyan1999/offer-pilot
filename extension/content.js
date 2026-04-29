@@ -190,6 +190,82 @@ function extractCurrentJob() {
   ]);
 }
 
+function showOfferPilotLoading(message = "Reading LinkedIn search results...") {
+  let mask = document.getElementById("offerpilot-loading-mask");
+  if (!mask) {
+    mask = document.createElement("div");
+    mask.id = "offerpilot-loading-mask";
+    mask.innerHTML = `
+      <style>
+        #offerpilot-loading-mask {
+          position: fixed;
+          inset: 0;
+          z-index: 2147483646;
+          display: grid;
+          place-items: center;
+          background: rgba(248, 251, 255, 0.86);
+          backdrop-filter: blur(4px);
+          color: #0f172a;
+          font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        }
+        #offerpilot-loading-mask * { box-sizing: border-box; }
+        .op-loading-card {
+          display: grid;
+          justify-items: center;
+          gap: 14px;
+          width: min(360px, calc(100vw - 40px));
+          border: 1px solid #dbe4f0;
+          border-radius: 8px;
+          padding: 26px 24px;
+          background: #ffffff;
+          box-shadow: 0 18px 55px rgba(15, 23, 42, 0.18);
+          text-align: center;
+        }
+        .op-loading-spinner {
+          width: 34px;
+          height: 34px;
+          border: 3px solid #dbe4f0;
+          border-top-color: #0052ff;
+          border-radius: 50%;
+          animation: op-loading-spin 0.85s linear infinite;
+        }
+        .op-loading-brand {
+          color: #0052ff;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+        .op-loading-message {
+          margin: 0;
+          color: #334155;
+          font-size: 15px;
+          font-weight: 700;
+          line-height: 1.4;
+        }
+        @keyframes op-loading-spin {
+          to { transform: rotate(360deg); }
+        }
+      </style>
+      <div class="op-loading-card" role="status" aria-live="polite">
+        <div class="op-loading-spinner" aria-hidden="true"></div>
+        <div class="op-loading-brand">OfferPilot</div>
+        <p class="op-loading-message"></p>
+      </div>
+    `;
+    document.body.appendChild(mask);
+  }
+
+  const messageNode = mask.querySelector(".op-loading-message");
+  if (messageNode) {
+    messageNode.textContent = message;
+  }
+}
+
+function hideOfferPilotLoading() {
+  document.getElementById("offerpilot-loading-mask")?.remove();
+}
+
 function escapeHtml(value) {
   return clean(value).replace(/[&<>"']/g, (char) => {
     const entities = {
@@ -393,7 +469,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.action === "showOfferPilotLoading") {
+    showOfferPilotLoading(message.message);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message?.action === "hideOfferPilotLoading") {
+    hideOfferPilotLoading();
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message?.action === "showOfferPilotPanel") {
+    hideOfferPilotLoading();
     showOfferPilotPanel(message);
     sendResponse({ ok: true });
     return true;
